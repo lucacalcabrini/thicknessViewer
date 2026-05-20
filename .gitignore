@@ -9,6 +9,7 @@ build/
 *.log
 *.exe
 _thickness_update.bat
+*.par
 # Database archivio (43 MB, generato/aggiornato a runtime)
 *.sqlite
 *.sqlite-journal

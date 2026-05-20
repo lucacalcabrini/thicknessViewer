@@ -83,18 +83,45 @@ def get_app_dir():
 
 SETTINGS_FILE = "thickness_viewer.ini"
 
+_PROGRAMDATA_DIRS = [
+    r"C:\ProgramData\ThicknessViewer",
+    r"D:\ProgramData\ThicknessViewer",
+]
+
+def _find_settings_file():
+    """Cerca il file di configurazione: cartella exe → ProgramData C → ProgramData D.
+    Accetta sia .ini che .par (stesso formato). Restituisce (path_trovato_o_default, trovato)."""
+    for folder in [get_app_dir()] + _PROGRAMDATA_DIRS:
+        for ext in ('.ini', '.par'):
+            p = os.path.join(folder, 'thickness_viewer' + ext)
+            if os.path.isfile(p):
+                return p, True
+    return os.path.join(get_app_dir(), SETTINGS_FILE), False
+
 def load_settings():
-    path = os.path.join(get_app_dir(), SETTINGS_FILE)
+    src, found = _find_settings_file()
     cfg = configparser.ConfigParser()
     cfg['PLC'] = {'ip':'192.168.0.1','rack':'0','slot':'1','db':'16070'}
     cfg['SQL'] = {'path':'thickness_archive.sqlite'}
-    if os.path.isfile(path):
-        try: cfg.read(path, encoding='utf-8')
+    if found:
+        try: cfg.read(src, encoding='utf-8')
         except Exception: pass
-    return cfg, path
+    # Normalizza sempre il path di salvataggio in .ini
+    save_path = os.path.splitext(src)[0] + '.ini'
+    return cfg, save_path
+
+def load_settings_from_file(path):
+    """Carica parametri da un .par o .ini specifico (scelto dall'utente)."""
+    cfg = configparser.ConfigParser()
+    cfg['PLC'] = {'ip':'192.168.0.1','rack':'0','slot':'1','db':'16070'}
+    cfg['SQL'] = {'path':'thickness_archive.sqlite'}
+    try: cfg.read(path, encoding='utf-8')
+    except Exception: pass
+    return cfg
 
 def save_settings(cfg, path):
     try:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f: cfg.write(f)
         return True
     except Exception: return False
@@ -496,6 +523,7 @@ class ThicknessApp(tk.Tk):
         self.configure(bg=DARK_BG)
 
         self._cfg, self._cfg_path = load_settings()
+        self._cfg_path_var = tk.StringVar(value=self._cfg_path)
         self.db_data = None
         self._ae_running = False
         self._ae_timer   = None
@@ -1770,12 +1798,16 @@ class ThicknessApp(tk.Tk):
 
         lfi=ttk.LabelFrame(wrap,text="  File di setup  ",padding=8)
         lfi.pack(fill="x",pady=4)
-        for r,(lbl,val) in enumerate([("INI:",self._cfg_path),("App dir:",get_app_dir())]):
-            tk.Label(lfi,text=lbl,bg=DARK_BG,fg=MUTED_CLR,font=("Consolas",9),
-                     anchor="w",width=10).grid(row=r,column=0,sticky="w",padx=2,pady=2)
-            tk.Label(lfi,text=val,bg=DARK_BG,fg=ACCENT,font=("Consolas",9),
-                     wraplength=600,justify="left",anchor="w"
-                     ).grid(row=r,column=1,sticky="w",padx=4,pady=2)
+        tk.Label(lfi,text="INI:",bg=DARK_BG,fg=MUTED_CLR,font=("Consolas",9),
+                 anchor="w",width=10).grid(row=0,column=0,sticky="w",padx=2,pady=2)
+        tk.Label(lfi,textvariable=self._cfg_path_var,bg=DARK_BG,fg=ACCENT,
+                 font=("Consolas",9),wraplength=580,justify="left",anchor="w"
+                 ).grid(row=0,column=1,sticky="w",padx=4,pady=2)
+        tk.Label(lfi,text="App dir:",bg=DARK_BG,fg=MUTED_CLR,font=("Consolas",9),
+                 anchor="w",width=10).grid(row=1,column=0,sticky="w",padx=2,pady=2)
+        tk.Label(lfi,text=get_app_dir(),bg=DARK_BG,fg=ACCENT,font=("Consolas",9),
+                 wraplength=580,justify="left",anchor="w"
+                 ).grid(row=1,column=1,sticky="w",padx=4,pady=2)
 
         plc_lf=ttk.LabelFrame(wrap,text="  PLC  ",padding=8); plc_lf.pack(fill="x",pady=6)
         if not hasattr(self,'_pv_ip'):
@@ -1813,7 +1845,9 @@ class ThicknessApp(tk.Tk):
         btn_lf=ttk.Frame(wrap); btn_lf.pack(fill="x",pady=10)
         ttk.Button(btn_lf,text="💾 Salva",style="Accent.TButton",
                    command=self._save_confirm).pack(side="left",padx=2)
-        ttk.Button(btn_lf,text="📂 Apri cartella",
+        ttk.Button(btn_lf,text="📂 Carica .par/.ini",
+                   command=self._load_params_file).pack(side="left",padx=2)
+        ttk.Button(btn_lf,text="📁 Apri cartella",
                    command=lambda:self._open_path(get_app_dir())).pack(side="left",padx=2)
 
         notes_lf=ttk.LabelFrame(wrap,text="  Note tecniche  ",padding=8)
@@ -1865,7 +1899,38 @@ FISICA: laser SOTTO il disco, quota decresce con spessore crescente.
 
     def _save_confirm(self):
         self._save_ini()
-        messagebox.showinfo("Salvato",f"INI: {self._cfg_path}")
+        messagebox.showinfo("Salvato", f"INI: {self._cfg_path}", parent=self)
+
+    def _load_params_file(self):
+        """Carica parametri da un file .par o .ini scelto dall'utente."""
+        dirs = [get_app_dir()] + _PROGRAMDATA_DIRS
+        init_dir = next((d for d in dirs if os.path.isdir(d)), get_app_dir())
+        fp = filedialog.askopenfilename(
+            parent=self,
+            title="Carica file parametri",
+            initialdir=init_dir,
+            filetypes=[("Parametri", "*.ini *.par"), ("Tutti i file", "*.*")],
+        )
+        if not fp:
+            return
+        cfg = load_settings_from_file(fp)
+        # Aggiorna StringVars nel tab impostazioni
+        if hasattr(self, '_pv_ip'):
+            self._pv_ip.set(cfg['PLC'].get('ip', '192.168.0.1'))
+            self._pv_rack.set(cfg['PLC'].get('rack', '0'))
+            self._pv_slot.set(cfg['PLC'].get('slot', '1'))
+            self._pv_db.set(cfg['PLC'].get('db', '16010'))
+        if hasattr(self, '_pv_sql'):
+            self._pv_sql.set(cfg['SQL'].get('path', 'thickness_archive.sqlite'))
+        # Il file di salvataggio diventa .ini nella stessa cartella del file caricato
+        self._cfg = cfg
+        self._cfg_path = os.path.splitext(fp)[0] + '.ini'
+        self._cfg_path_var.set(self._cfg_path)
+        messagebox.showinfo(
+            "Parametri caricati",
+            f"Caricato da:\n{fp}\n\nSalvataggio su:\n{self._cfg_path}",
+            parent=self,
+        )
 
     def _browse_sql(self):
         init=resolve_sql(self._pv_sql.get())
