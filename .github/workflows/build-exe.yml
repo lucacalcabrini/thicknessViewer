@@ -1,0 +1,61 @@
+name: Build EXE
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Read version from source
+        id: version
+        run: |
+          $ver = (Select-String -Path "thickness_viewer_v1_4_2.pyw" -Pattern 'APP_VERSION\s*=\s*"(.+)"').Matches.Groups[1].Value
+          echo "ver=$ver" >> $env:GITHUB_OUTPUT
+          echo "Version: $ver"
+
+      - name: Build EXE with PyInstaller
+        run: |
+          pyinstaller --onefile --windowed --name "ThicknessProfiler_v${{ steps.version.outputs.ver }}" thickness_viewer_v1_4_2.pyw
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ThicknessProfiler-v${{ steps.version.outputs.ver }}-Windows
+          path: dist/ThicknessProfiler_v${{ steps.version.outputs.ver }}.exe
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Thickness Profiler v${{ steps.version.outputs.ver }}"
+          files: dist/ThicknessProfiler_v${{ steps.version.outputs.ver }}.exe
+          generate_release_notes: false
+          body: |
+            ## Thickness Profiler v${{ steps.version.outputs.ver }}
+
+            ### Installazione
+            Scarica `ThicknessProfiler_v${{ steps.version.outputs.ver }}.exe` e avvialo direttamente.
+            Non richiede installazione di Python o librerie aggiuntive.
+
+            ### Note
+            Il file `thickness_viewer.ini` viene creato automaticamente nella stessa cartella dell'exe al primo avvio.
