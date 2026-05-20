@@ -19,7 +19,7 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.4"
+APP_VERSION = "1.4.5"
 APP_BUILD   = "2026-05-20"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
@@ -531,6 +531,7 @@ class ThicknessApp(tk.Tk):
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(500, self._startup)
+        self.after(100, self._cleanup_update_leftovers)
         # Controlla aggiornamenti GitHub (non bloccante, timeout 5s)
         self.after(300, self._check_for_updates)
 
@@ -596,49 +597,56 @@ class ThicknessApp(tk.Tk):
                 daemon=True
             ).start()
 
+    def _cleanup_update_leftovers(self):
+        """All'avvio rimuove eventuali ThicknessProfiler_v*.exe vecchi nella stessa cartella."""
+        import glob
+        if not getattr(sys, 'frozen', False):
+            return
+        exe_dir  = os.path.dirname(sys.executable)
+        exe_name = os.path.basename(sys.executable)
+        for old in glob.glob(os.path.join(exe_dir, "ThicknessProfiler_v*.exe")):
+            if os.path.basename(old) != exe_name:
+                try: os.remove(old)
+                except Exception: pass
+
     def _download_and_restart(self, url, filename):
+        """Scarica il nuovo exe con barra % nel titolo, lo lancia con --replace=,
+        poi si chiude. Il nuovo exe cancella da solo il vecchio dopo 2s."""
         import urllib.request, subprocess
+        if not getattr(sys, 'frozen', False):
+            self.after(0, lambda: messagebox.showinfo(
+                "Info",
+                "Auto-update disponibile solo nell'exe compilato.\n"
+                "Scarica manualmente la nuova versione da GitHub.",
+                parent=self))
+            return
+
+        exe_path = sys.executable
+        exe_dir  = os.path.dirname(exe_path)
+        new_exe  = os.path.join(exe_dir, filename)
+
         try:
-            if not getattr(sys, 'frozen', False):
-                self.after(0, lambda: messagebox.showinfo(
-                    "Info",
-                    "Auto-update disponibile solo nell'exe compilato.\n"
-                    "Scarica manualmente la nuova versione da GitHub.",
-                    parent=self))
-                return
-
-            exe_path = sys.executable
-            exe_dir  = os.path.dirname(exe_path)
-            exe_name = os.path.basename(exe_path)
-            new_exe  = os.path.join(exe_dir, filename)
-
-            self.after(0, lambda: self.title("⬇  Download aggiornamento in corso…"))
-
+            self.after(0, lambda: self.title("⬇  Connessione…"))
             req = urllib.request.Request(
                 url, headers={"User-Agent": "ThicknessProfiler-AutoUpdater"})
             with urllib.request.urlopen(req, timeout=120) as resp:
-                data = resp.read()
-
-            with open(new_exe, "wb") as f:
-                f.write(data)
-
-            # Batch script: aspetta chiusura app, rinomina, riavvia
-            bat = os.path.join(exe_dir, "_thickness_update.bat")
-            with open(bat, "w") as f:
-                f.write("@echo off\n")
-                f.write("timeout /t 2 /nobreak >nul\n")
-                f.write(f'del /f "{exe_path}"\n')
-                f.write(f'ren "{new_exe}" "{exe_name}"\n')
-                f.write(f'start "" "{exe_path}"\n')
-                f.write('del /f "%~f0"\n')
-
-            subprocess.Popen(
-                ["cmd", "/c", bat],
-                creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
-            )
-            self.after(0, self.destroy)
-
+                total = int(resp.headers.get("Content-Length") or 0)
+                done  = 0
+                with open(new_exe, "wb") as f:
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        done += len(chunk)
+                        if total:
+                            pct = done * 100 // total
+                            self.after(0, lambda p=pct:
+                                self.title(f"⬇  Download {p}%…"))
         except Exception as e:
+            if os.path.isfile(new_exe):
+                try: os.remove(new_exe)
+                except Exception: pass
             self.after(0, lambda err=str(e): messagebox.showerror(
                 "Errore aggiornamento",
                 f"Download fallito:\n{err}\n\n"
@@ -647,6 +655,24 @@ class ThicknessApp(tk.Tk):
                 parent=self))
             self.after(0, lambda: self.title(
                 f"◈ Thickness Profiler  {APP_RELEASE}  —  {FB_TARGET}"))
+            return
+
+        # Lancia il nuovo exe passando il percorso del vecchio da cancellare
+        try:
+            subprocess.Popen(
+                [new_exe, f"--replace={exe_path}"],
+                creationflags=subprocess.DETACHED_PROCESS
+                              | subprocess.CREATE_NEW_PROCESS_GROUP,
+            )
+            self.after(0, self.destroy)
+        except Exception as e:
+            if os.path.isfile(new_exe):
+                try: os.remove(new_exe)
+                except Exception: pass
+            self.after(0, lambda err=str(e): messagebox.showerror(
+                "Errore aggiornamento",
+                f"Impossibile avviare la nuova versione:\n{err}",
+                parent=self))
 
     # ── Settings ─────────────────────────────────────────────
     def _save_ini(self):
@@ -1963,7 +1989,25 @@ class ThicknessApp(tk.Tk):
 
 # ══════════════════════════════════════════════════════════════════
 if __name__=="__main__":
-    app=ThicknessApp()
+    import multiprocessing
+    multiprocessing.freeze_support()
+
+    # Gestione --replace=<vecchio_exe>: il vecchio è già chiuso,
+    # aspetta 2s in background poi lo cancella.
+    _old_to_delete = None
+    for _arg in sys.argv[1:]:
+        if _arg.startswith("--replace="):
+            _old_to_delete = _arg[len("--replace="):]
+            break
+    if _old_to_delete:
+        import threading, time as _time
+        def _delete_old(p=_old_to_delete):
+            _time.sleep(2)
+            try: os.remove(p)
+            except Exception: pass
+        threading.Thread(target=_delete_old, daemon=True).start()
+
+    app = ThicknessApp()
     app.mainloop()
 
 
