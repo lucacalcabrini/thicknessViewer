@@ -19,10 +19,8 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.2"
-APP_BUILD   = "2026-05-15"
-APP_BUILD   = "2026-04-28"
-APP_BUILD   = "2026-04-28"
+APP_VERSION = "1.4.3"
+APP_BUILD   = "2026-05-20"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
 FB_SCL_NAME = '"Fb936_ControlloSpessore_v12"'
@@ -521,6 +519,16 @@ class ThicknessApp(tk.Tk):
         self.title(f"◈ Thickness Profiler  {APP_RELEASE}  —  {FB_TARGET}")
         self.geometry("1460x940"); self.minsize(1150,730)
         self.configure(bg=DARK_BG)
+        # Icona finestra: usa l'ico embedded nell'exe (frozen) o il file locale
+        try:
+            if getattr(sys, 'frozen', False):
+                self.iconbitmap(sys.executable)
+            else:
+                _ico = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icon.ico')
+                if os.path.isfile(_ico):
+                    self.iconbitmap(_ico)
+        except Exception:
+            pass
 
         self._cfg, self._cfg_path = load_settings()
         self._cfg_path_var = tk.StringVar(value=self._cfg_path)
@@ -1902,7 +1910,8 @@ FISICA: laser SOTTO il disco, quota decresce con spessore crescente.
         messagebox.showinfo("Salvato", f"INI: {self._cfg_path}", parent=self)
 
     def _load_params_file(self):
-        """Carica parametri da un file .par o .ini scelto dall'utente."""
+        """Carica parametri da un file .par o .ini scelto dall'utente,
+        poi chiede dove salvare l'INI (default: C:\\ProgramData\\ThicknessViewer)."""
         dirs = [get_app_dir()] + _PROGRAMDATA_DIRS
         init_dir = next((d for d in dirs if os.path.isdir(d)), get_app_dir())
         fp = filedialog.askopenfilename(
@@ -1914,6 +1923,20 @@ FISICA: laser SOTTO il disco, quota decresce con spessore crescente.
         if not fp:
             return
         cfg = load_settings_from_file(fp)
+
+        # Chiede dove salvare — default C:\ProgramData\ThicknessViewer
+        save_dir = r"C:\ProgramData\ThicknessViewer"
+        save_path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Salva file parametri come…",
+            initialdir=save_dir,
+            initialfile="thickness_viewer.ini",
+            defaultextension=".ini",
+            filetypes=[("File INI", "*.ini"), ("Tutti i file", "*.*")],
+        )
+        if not save_path:
+            return  # utente ha annullato il salvataggio
+
         # Aggiorna StringVars nel tab impostazioni
         if hasattr(self, '_pv_ip'):
             self._pv_ip.set(cfg['PLC'].get('ip', '192.168.0.1'))
@@ -1922,15 +1945,23 @@ FISICA: laser SOTTO il disco, quota decresce con spessore crescente.
             self._pv_db.set(cfg['PLC'].get('db', '16010'))
         if hasattr(self, '_pv_sql'):
             self._pv_sql.set(cfg['SQL'].get('path', 'thickness_archive.sqlite'))
-        # Il file di salvataggio diventa .ini nella stessa cartella del file caricato
+
         self._cfg = cfg
-        self._cfg_path = os.path.splitext(fp)[0] + '.ini'
-        self._cfg_path_var.set(self._cfg_path)
-        messagebox.showinfo(
-            "Parametri caricati",
-            f"Caricato da:\n{fp}\n\nSalvataggio su:\n{self._cfg_path}",
-            parent=self,
-        )
+        self._cfg_path = save_path
+        self._cfg_path_var.set(save_path)
+        # Salva subito nella destinazione scelta
+        if save_settings(cfg, save_path):
+            messagebox.showinfo(
+                "Parametri salvati",
+                f"Caricato da:\n{fp}\n\nSalvato in:\n{save_path}",
+                parent=self,
+            )
+        else:
+            messagebox.showerror(
+                "Errore salvataggio",
+                f"Impossibile scrivere:\n{save_path}",
+                parent=self,
+            )
 
     def _browse_sql(self):
         init=resolve_sql(self._pv_sql.get())
