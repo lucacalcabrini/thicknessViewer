@@ -1,0 +1,4 @@
+matplotlib
+numpy
+python-snap7
+pyinstaller

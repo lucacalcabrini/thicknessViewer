@@ -1,0 +1,650 @@
+﻿TYPE "UdtControlloSpessore"
+VERSION : 0.1
+   STRUCT
+      PosizioneCentroVentosa { S7_SetPoint := 'True'} : Real;   // [mm] posizione asse trasfert con laser al centro della ventosa
+      RangeControllo { S7_SetPoint := 'True'} : Real := 60.0;   // [mm] range +/- rispetto al centro della ventosa per il controllo dello spessore
+      RangeRallenta { S7_SetPoint := 'True'} : Real := 50.0;   // [mm] range sommati al range ci controllo per il rallentamento 
+      nLettureConsecutiveAllarme { S7_SetPoint := 'True'} : Real := 10.0;   // [n] numero di letturte consecutive per decretare doppio spessore
+      SpessoreMassimo { S7_SetPoint := 'True'} : Real := 1.5;   // [mm] Spessore oltre il quale viene dichiarato doppio disco
+      OvrTrasfertPerpassaggio { S7_SetPoint := 'True'} : LReal := 50.0;   // [0..100%] velocità al momento del passaggio 
+      DisabilitaControllo { S7_SetPoint := 'True'} : Bool;
+      SpessoreDiscoRiferimento { S7_SetPoint := 'True'} : Real;   // [mm] spessore disco per taratura controllo.
+      AbilitaTaratura { S7_SetPoint := 'True'} : Bool;   // 1 = Taratura con spessore di riferimento
+   END_STRUCT;
+
+END_TYPE
+
+FUNCTION_BLOCK "Fb936_ControlloSpessore_v0"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 1.0
+// =============================================================================
+//  Fb936_ControlloSpessore_v0  —  VERSION 1.0
+//
+//  MODIFICHE v1.0 rispetto alla v0.2
+//    - Rilevamento doppio disco basato su aProfiloSpessore (compensato baseline)
+//      e non più sul buffer temporale Dati[0..100]
+//    - nLettureConsecutiveAllarme ora è un conteggio POSIZIONALE:
+//        numero di celle del profilo con spessore > SpessoreMassimo
+//      (suggerito: ridurre il valore da 15 campioni a ~5 celle tipicamente)
+//    - Laser range validation: migrata su I_Spessore_mm (valore grezzo)
+//      così i limiti sono espressi nel dominio fisico del sensore,
+//      indipendenti dalla polarità logica configurata via I_InvertiLettura
+//    - Nuove uscite O_nCelleFuoriSoglia e O_LaserInRange (diagnostica)
+//    - Buffer Dati[0..100] mantenuto solo per diagnostica HMI
+//
+//  MODIFICHE v0.2
+//    - Profilometro posizionale su array MaxData+1 celle
+//    - Taratura automatica tramite AbilitaTaratura
+//    - Compensazione baseline
+//    - Output scalari sintesi passata
+//
+//  UDT "UdtControlloSpessore" richiede:
+//    PosizioneCentroVentosa     : Real
+//    RangeControllo             : Real
+//    RangeRallenta              : Real
+//    nLettureConsecutiveAllarme : Real  ← ora inteso come N celle posizionali
+//    SpessoreMassimo            : Real
+//    OvrTrasfertPerpassaggio    : LReal
+//    DisabilitaControllo        : Bool
+//    AbilitaTaratura            : Bool
+//    SpessoreDiscoRiferimento   : Real
+// =============================================================================
+   VAR_INPUT RETAIN
+      I_ParametriCntrolloSpessore : "UdtControlloSpessore";
+   END_VAR
+   VAR_INPUT 
+      I_Spessore_mm : Real;
+      I_InvertiLettura : Bool;   // moltiplica per -1
+      I_PiecePresence : Bool;
+      I_ActPosition : LReal;
+      I_ActSpeed : LReal;
+      I_DirLavoro : Int;   // 0=entrambe  1=solo positive  2=solo negative
+      I_MaxRangeLaser : Real;   // [mm] limite max fisico sensore (valore grezzo)
+      I_MinRangeLaser : Real;   // [mm] limite min fisico sensore (valore grezzo)
+   END_VAR
+
+   VAR_OUTPUT 
+      O_SpessoreOk : Bool;
+      O_SpessoreNOK : Bool;
+      O_AlmControlloDisattivo : Bool;
+      O_TaraturaAttiva : Bool;
+      O_TaraturaCompletata : Bool;
+      O_SpessoreMedio : Real;   // [mm] media passata (compensato baseline)
+      O_SpessoreMax : Real;   // [mm] massimo passata (compensato baseline)
+      O_DeltaMedio : Real;   // [mm] delta medio vs SpessoreDiscoRiferimento
+      O_DeltaMax : Real;   // [mm] delta max vs SpessoreDiscoRiferimento
+      O_nCelleProfilo : Int;   // [n]  celle profilo campionate
+      O_nCelleFuoriSoglia : Int;   // [n]  celle con aProfiloSpessore > SpessoreMassimo
+      O_LaserInRange : Bool;   // stato validità laser corrente (diagnostica)
+   END_VAR
+
+   VAR_IN_OUT 
+      IO_OvrAuto : LReal;
+      IO_OvrMan : LReal;
+   END_VAR
+
+   VAR 
+      Pinza : Struct
+         InZonaControllo : Bool;
+         InZonaRallenta : Bool;
+         OvrAutoOld { S7_SetPoint := 'True'} : LReal;
+         OvrManOld { S7_SetPoint := 'True'} : LReal;
+         nLettureConsecutive : Real;   // mantenuto per retrocompatibilità HMI
+      END_STRUCT;
+   END_VAR
+   VAR RETAIN
+      aBaseline { S7_SetPoint := 'True'} : Array[0..#MaxData] of Real;   // offset geometrico per posizione
+      baselineValida { S7_SetPoint := 'True'} : Bool;
+   END_VAR
+   VAR 
+      Fp {InstructionName := 'R_TRIG'; LibVersion := '1.0'; S7_SetPoint := 'False'} : R_TRIG;
+      Fn {InstructionName := 'F_TRIG'; LibVersion := '1.0'; S7_SetPoint := 'False'} : F_TRIG;
+      FpSlowing {InstructionName := 'R_TRIG'; LibVersion := '1.0'; S7_SetPoint := 'False'} : R_TRIG;
+      FnSlowing {InstructionName := 'F_TRIG'; LibVersion := '1.0'; S7_SetPoint := 'False'} : F_TRIG;
+      FpTaratura {InstructionName := 'R_TRIG'; LibVersion := '1.0'; S7_SetPoint := 'False'} : R_TRIG;
+      DirOk : Bool;
+      Ripeti : Bool;   // solo per test
+      AppMinIndexSurce : Int;   // deprecato, mantenuto per compat DB
+      AppMaxIndexSurce : Int;   // deprecato
+      AppMaxIndex : Int;   // deprecato Buffer temporale (solo diagnostica HMI; NON usato per OK/NOK in v1.0)
+      taraturaInCorso : Bool;   // Buffer profilometro posizionale
+      aSomRaw : Array[0..#MaxData] of Real;
+      aNraw : Array[0..#MaxData] of Int;
+      aSomCal : Array[0..#MaxData] of Real;
+      aNcal : Array[0..#MaxData] of Int;
+      aProfiloSpessore : Array[0..#MaxData] of Real;   // compensato baseline
+      aProfiloDelta : Array[0..#MaxData] of Real;   // vs SpessoreDiscoRiferimento Risultati scalari ultima passata
+      AppSpessoreOk : Bool;
+      AppSpessoreNok : Bool;
+      AppSpessoreMedio : Real;
+      AppSpessoreMax : Real;
+      AppDeltaMedio : Real;
+      AppDeltaMax : Real;
+      AppNcelleProfilo : Int;
+      AppValidValue : Bool;
+      OldDirLavoro { S7_SetPoint := 'True'} : Int;
+      AuxFpCambioDirezione { S7_SetPoint := 'True'} : Bool;
+   END_VAR
+
+   VAR_TEMP 
+      Max : Real;
+      Min : Real;
+      Spessore_mm : Real;
+      i : Int;
+      K : Int;
+      m : Int;
+      idx : Int;
+      posInizio : Real;
+      risoluzione : Real;
+      tempR : Real;
+      tempIdx : Int;
+      nLettureTot : Int;
+      nCelleFuori : Int;
+      valSpessore : Real;
+      ActPosition : Real;
+      ActSpeed : Real;
+   END_VAR
+
+   VAR CONSTANT 
+      "Rv0+" : Real := 1.0;
+      "Rv0-" : Real := -1.0;
+      MaxData : Int := 200;
+   END_VAR
+
+
+BEGIN
+	REGION conversione valori
+	    #ActPosition := LREAL_TO_REAL(#I_ActPosition);
+	    #ActSpeed := LREAL_TO_REAL(#I_ActSpeed);
+	END_REGION
+	
+	
+	REGION InRange di controllo
+	    
+	    CASE #I_DirLavoro OF
+	        0://0=entrambe
+	            #DirOk := (#ActSpeed < #"Rv0-") OR (#ActSpeed > #"Rv0+");
+	        1:  //1=solo positive
+	            #DirOk := (#ActSpeed > #"Rv0+");
+	        2:  //2=solo negative
+	            #DirOk := (#ActSpeed < #"Rv0-");
+	        ELSE
+	            #DirOk := false;
+	    END_CASE;
+	    
+	    #Max := #I_ParametriCntrolloSpessore.PosizioneCentroVentosa + #I_ParametriCntrolloSpessore.RangeControllo;
+	    #Min := #I_ParametriCntrolloSpessore.PosizioneCentroVentosa - #I_ParametriCntrolloSpessore.RangeControllo;
+	    #Pinza.InZonaControllo := (#ActPosition >= #Min) AND (#ActPosition <= #Max) AND #DirOk AND (#I_PiecePresence OR #taraturaInCorso);
+	    
+	    #Max := #I_ParametriCntrolloSpessore.PosizioneCentroVentosa + #I_ParametriCntrolloSpessore.RangeControllo + #I_ParametriCntrolloSpessore.RangeRallenta;
+	    #Min := #I_ParametriCntrolloSpessore.PosizioneCentroVentosa - #I_ParametriCntrolloSpessore.RangeControllo - #I_ParametriCntrolloSpessore.RangeRallenta;
+	    #Pinza.InZonaRallenta := (#ActPosition >= #Min) AND (#ActPosition <= #Max) AND #DirOk AND (#I_PiecePresence OR #taraturaInCorso);
+	    
+	    // Mappatura posizione → indice array [0..MaxData]
+	    IF #I_ParametriCntrolloSpessore.RangeControllo > 0.0 THEN
+	        #risoluzione := (2.0 * #I_ParametriCntrolloSpessore.RangeControllo) / INT_TO_REAL(#MaxData);
+	    ELSE
+	        #risoluzione := 1.0;   // fallback: evita divisione per zero
+	    END_IF;
+	    
+	    CASE #I_DirLavoro OF
+	        0://0=entrambe
+	            IF (#ActSpeed < #"Rv0-") THEN
+	                #posInizio := #I_ParametriCntrolloSpessore.PosizioneCentroVentosa + #I_ParametriCntrolloSpessore.RangeControllo;
+	                #idx := REAL_TO_INT((#posInizio - #ActPosition) / #risoluzione); // Buffer profilo posizionale
+	            ELSIF (#ActSpeed > #"Rv0+") THEN
+	                #posInizio := #I_ParametriCntrolloSpessore.PosizioneCentroVentosa - #I_ParametriCntrolloSpessore.RangeControllo;
+	                #idx := REAL_TO_INT((#ActPosition - #posInizio) / #risoluzione); // Buffer profilo posizionale
+	            END_IF;
+	        1:  //1=solo positive
+	            #posInizio := #I_ParametriCntrolloSpessore.PosizioneCentroVentosa - #I_ParametriCntrolloSpessore.RangeControllo;
+	            #idx := REAL_TO_INT((#ActPosition - #posInizio) / #risoluzione); // Buffer profilo posizionale
+	        2:  //2=solo negative
+	            #posInizio := #I_ParametriCntrolloSpessore.PosizioneCentroVentosa + #I_ParametriCntrolloSpessore.RangeControllo;
+	            #idx := REAL_TO_INT((#posInizio - #ActPosition) / #risoluzione); // Buffer profilo posizionale
+	    END_CASE;
+	    
+	    
+	END_REGION
+	
+	REGION Laser validate range
+	    // v1.0: la validazione è sul valore GREZZO del sensore.
+	    //       I limiti rappresentano il range fisico del laser (es. 10..100 mm),
+	    //       indipendenti dalla polarità logica configurata via I_InvertiLettura.
+	    #AppValidValue := (#I_Spessore_mm >= #I_MinRangeLaser) AND (#I_Spessore_mm <= #I_MaxRangeLaser);
+	END_REGION
+	
+	REGION SPESSORE
+	    IF #I_InvertiLettura THEN
+	        #Spessore_mm := #I_Spessore_mm * -1.0;
+	    ELSE
+	        #Spessore_mm := #I_Spessore_mm;
+	    END_IF;
+	END_REGION
+	
+	REGION cambio ovr per controllo abilitato 
+	    #FpSlowing(CLK := #Pinza.InZonaRallenta);
+	    #FnSlowing(CLK := #Pinza.InZonaRallenta);
+	    
+	    IF #FpSlowing.Q THEN
+	        #Pinza.OvrAutoOld := #IO_OvrAuto;
+	        #Pinza.OvrManOld := #IO_OvrMan;
+	        IF #IO_OvrAuto > #I_ParametriCntrolloSpessore.OvrTrasfertPerpassaggio THEN
+	            #IO_OvrAuto := #I_ParametriCntrolloSpessore.OvrTrasfertPerpassaggio;
+	        END_IF;
+	        IF #IO_OvrMan > #I_ParametriCntrolloSpessore.OvrTrasfertPerpassaggio THEN
+	            #IO_OvrMan := #I_ParametriCntrolloSpessore.OvrTrasfertPerpassaggio;
+	        END_IF;
+	    END_IF;
+	    
+	    IF #FnSlowing.Q THEN
+	        #IO_OvrAuto := #Pinza.OvrAutoOld;
+	        #IO_OvrMan := #Pinza.OvrManOld;
+	    END_IF;
+	    
+	END_REGION
+	
+	REGION avvio taratura
+	    // Sul fronte di salita di AbilitaTaratura (solo se pinza NON è in zona):
+	    //   1. pulisce i buffer di calibrazione
+	    //   2. invalida la baseline esistente
+	    //   3. arma il flag taraturaInCorso → prossima passata = taratura
+	    
+	    #FpTaratura(CLK := #I_ParametriCntrolloSpessore.AbilitaTaratura);
+	    
+	    IF #FpTaratura.Q AND NOT #Pinza.InZonaControllo THEN
+	        #taraturaInCorso := TRUE;
+	        #baselineValida := FALSE;
+	        FOR #i := 0 TO #MaxData DO
+	            #aSomCal[#i] := 0.0;
+	            #aNcal[#i] := 0;
+	        END_FOR;
+	    END_IF;
+	    // in caso di cambio posizione di lavoro va eseguita nuovamente una taratura
+	    IF #I_DirLavoro <> #OldDirLavoro THEN
+	        #baselineValida := FALSE;
+	        #OldDirLavoro := #I_DirLavoro;
+	    END_IF;
+	END_REGION
+	
+	REGION controllo spessore
+	    #Fp(CLK := #Pinza.InZonaControllo);
+	    #Fn(CLK := #Pinza.InZonaControllo);
+	    
+	    // ═══ RESET ad ogni inizio passata ═══
+	    IF #Fp.Q THEN
+	        #Pinza.nLettureConsecutive := 0.0;
+	        #AppSpessoreOk := false;
+	        #AppSpessoreNok := false;
+	        #AppMaxIndex := 0;
+	        #AppMinIndexSurce := 0;
+	        #AppMaxIndexSurce := 0;
+	        // Reset buffer profilo posizionale (solo se NON in taratura)
+	        IF NOT #taraturaInCorso THEN
+	            FOR #i := 0 TO #MaxData DO
+	                #aSomRaw[#i] := 0.0;
+	                #aNraw[#i] := 0;
+	            END_FOR;
+	        END_IF;
+	    END_IF;
+	    
+	    // ═══ ACQUISIZIONE ad ogni ciclo in zona (con gate su AppValidValue) ═══
+	    IF #Pinza.InZonaControllo AND #AppValidValue THEN// AND NOT #Fp.Q AND NOT #Fn.Q THEN
+	        IF #idx < 0 THEN
+	            #idx := 0;
+	        END_IF;
+	        IF #idx > #MaxData THEN
+	            #idx := #MaxData;
+	        END_IF;
+	        
+	        IF #taraturaInCorso THEN
+	            #aSomCal[#idx] := #aSomCal[#idx] + #Spessore_mm;
+	            #aNcal[#idx] := #aNcal[#idx] + 1;
+	        ELSE
+	            #aSomRaw[#idx] := #aSomRaw[#idx] + #Spessore_mm;
+	            #aNraw[#idx] := #aNraw[#idx] + 1;
+	        END_IF;
+	    END_IF;
+	    
+	    // ═══ FINE PASSATA: elaborazione e rilevamento ═══
+	    IF (#Fn.Q OR #Ripeti) THEN
+	        
+	        IF #taraturaInCorso THEN
+	            // ─── RAMO TARATURA: calcolo baseline ───
+	            FOR #i := 0 TO #MaxData DO
+	                IF #aNcal[#i] > 0 THEN
+	                    #aBaseline[#i] := (#aSomCal[#i] / INT_TO_REAL(#aNcal[#i])) + #I_ParametriCntrolloSpessore.SpessoreDiscoRiferimento;
+	                ELSE
+	                    #aBaseline[#i] := 0.0;
+	                END_IF;
+	                #aSomCal[#i] := 0.0;
+	                #aNcal[#i] := 0;
+	            END_FOR;
+	            #baselineValida := TRUE;
+	            #taraturaInCorso := FALSE;
+	            // La taratura non concorre al giudizio OK/NOK misura
+	            #AppSpessoreOk := TRUE;
+	            #AppSpessoreNok := FALSE;
+	        ELSE
+	            // ─── RAMO MISURA NORMALE ───
+	            
+	            // STEP 1: costruzione profilo e scalari di sintesi
+	            //   aProfiloSpessore[i] = media(aSomRaw[i]) - aBaseline[i]
+	            //   aProfiloDelta[i]    = aProfiloSpessore[i] - SpessoreDiscoRiferimento
+	            //   Celle non campionate: mantengono il valore della passata precedente
+	            //   (garantisce profilo continuo su HMI; il rilevamento OK/NOK
+	            //    scarta queste celle grazie al check su aNraw[i] > 0)
+	            #AppSpessoreMedio := 0.0;
+	            #AppSpessoreMax := 0.0;
+	            #AppDeltaMedio := 0.0;
+	            #AppDeltaMax := 0.0;
+	            #nLettureTot := 0;
+	            
+	            FOR #i := 0 TO #MaxData DO
+	                IF #aNraw[#i] > 0 THEN
+	                    #tempR := #aSomRaw[#i] / INT_TO_REAL(#aNraw[#i]);
+	                    #aProfiloSpessore[#i] := #aBaseline[#i] - #tempR;
+	                    #aProfiloDelta[#i] := #aProfiloSpessore[#i] - #I_ParametriCntrolloSpessore.SpessoreDiscoRiferimento;
+	                    
+	                    #AppSpessoreMedio := #AppSpessoreMedio + #aProfiloSpessore[#i];
+	                    #AppDeltaMedio := #AppDeltaMedio + #aProfiloDelta[#i];
+	                    IF #aProfiloSpessore[#i] > #AppSpessoreMax THEN
+	                        #AppSpessoreMax := #aProfiloSpessore[#i];
+	                    END_IF;
+	                    IF #aProfiloDelta[#i] > #AppDeltaMax THEN
+	                        #AppDeltaMax := #aProfiloDelta[#i];
+	                    END_IF;
+	                    #nLettureTot := #nLettureTot + 1;
+	                END_IF;
+	            END_FOR;
+	            
+	            IF #nLettureTot > 0 THEN
+	                #AppSpessoreMedio := #AppSpessoreMedio / INT_TO_REAL(#nLettureTot);
+	                #AppDeltaMedio := #AppDeltaMedio / INT_TO_REAL(#nLettureTot);
+	            END_IF;
+	            #AppNcelleProfilo := #nLettureTot;
+	            
+	            // STEP 2: NUOVO v1.0 – rilevamento basato su baseline
+	            //   Conta celle campionate con aProfiloSpessore > SpessoreMassimo
+	            //   Se count >= nLettureConsecutiveAllarme → NOK
+	            //
+	            //   Vantaggi vs vecchio algoritmo su Dati[0..100]:
+	            //     + usa valore GIÀ compensato baseline (no offset macchina)
+	            //     + usa valore GIÀ mediato per cella (rumore ridotto)
+	            //     + non dipende dalla consecutività temporale dei campioni
+	            //     + robusto a gap di campionamento (celle vuote ignorate)
+	            //     + 601 celle vs 101 → miglior risoluzione posizionale
+	            //
+	            //   Se baseline NON tarata: aBaseline[i]=0, quindi
+	            //     aProfiloSpessore[i] = media letture grezze → comportamento
+	            //     degradato ma funzionale (senza compensazione offset).
+	            #nCelleFuori := 0;
+	            FOR #i := 0 TO #MaxData DO
+	                IF #aNraw[#i] > 0 THEN
+	                    IF #aProfiloSpessore[#i] > #I_ParametriCntrolloSpessore.SpessoreMassimo THEN
+	                        #nCelleFuori := #nCelleFuori + 1;
+	                        #Pinza.nLettureConsecutive := #Pinza.nLettureConsecutive + 1.0;
+	                    ELSE
+	                        #Pinza.nLettureConsecutive := 0.0;
+	                    END_IF;
+	                END_IF;
+	            END_FOR;
+	            
+	            IF #Pinza.nLettureConsecutive >= #I_ParametriCntrolloSpessore.nLettureConsecutiveAllarme THEN
+	                #AppSpessoreNok := TRUE;
+	                #AppSpessoreOk := FALSE;
+	            ELSE
+	                #AppSpessoreNok := FALSE;
+	                #AppSpessoreOk := TRUE;
+	            END_IF;
+	        END_IF;   // fine IF taraturaInCorso
+	        
+	        #Ripeti := false;
+	    END_IF;
+	END_REGION
+	
+	REGION uscite
+	    #O_SpessoreNOK := NOT #I_ParametriCntrolloSpessore.DisabilitaControllo AND #AppSpessoreNok;
+	    #O_SpessoreOk := #I_ParametriCntrolloSpessore.DisabilitaControllo OR #AppSpessoreOk;
+	    #O_AlmControlloDisattivo := #I_ParametriCntrolloSpessore.DisabilitaControllo;
+	    #O_TaraturaAttiva := #taraturaInCorso;
+	    #O_TaraturaCompletata := #baselineValida;
+	    #O_SpessoreMedio := #AppSpessoreMedio;
+	    #O_SpessoreMax := #AppSpessoreMax;
+	    #O_DeltaMedio := #AppDeltaMedio;
+	    #O_DeltaMax := #AppDeltaMax;
+	    #O_nCelleProfilo := #AppNcelleProfilo;
+	    #O_nCelleFuoriSoglia := #nCelleFuori;
+	    #O_LaserInRange := #AppValidValue;
+	END_REGION
+	
+	ENO := true;
+	
+	
+END_FUNCTION_BLOCK
+
+DATA_BLOCK "Db16010_ControlloSpessore"
+{ DB_Accessible_From_OPC_UA := 'FALSE' ;
+ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.2
+"Fb936_ControlloSpessore_v0"
+
+BEGIN
+   I_ParametriCntrolloSpessore.PosizioneCentroVentosa := 1930.0;
+   I_ParametriCntrolloSpessore.RangeControllo := 80.0;
+   I_ParametriCntrolloSpessore.RangeRallenta := 500.0;
+   I_ParametriCntrolloSpessore.nLettureConsecutiveAllarme := 15.0;
+   I_ParametriCntrolloSpessore.SpessoreMassimo := 1.0;
+   I_ParametriCntrolloSpessore.OvrTrasfertPerpassaggio := 100.0;
+   I_ParametriCntrolloSpessore.DisabilitaControllo := FALSE;
+   I_ParametriCntrolloSpessore.SpessoreDiscoRiferimento := 2.98;
+   I_ParametriCntrolloSpessore.AbilitaTaratura := FALSE;
+   Pinza.OvrAutoOld := 0.0;
+   Pinza.OvrManOld := 0.0;
+   aBaseline[0] := 0.0;
+   aBaseline[1] := 0.0;
+   aBaseline[2] := 0.0;
+   aBaseline[3] := 0.0;
+   aBaseline[4] := 0.0;
+   aBaseline[5] := 0.0;
+   aBaseline[6] := 0.0;
+   aBaseline[7] := 0.0;
+   aBaseline[8] := 0.0;
+   aBaseline[9] := 0.0;
+   aBaseline[10] := 0.0;
+   aBaseline[11] := 0.0;
+   aBaseline[12] := 0.0;
+   aBaseline[13] := 0.0;
+   aBaseline[14] := 0.0;
+   aBaseline[15] := 0.0;
+   aBaseline[16] := 0.0;
+   aBaseline[17] := 0.0;
+   aBaseline[18] := 0.0;
+   aBaseline[19] := 0.0;
+   aBaseline[20] := 0.0;
+   aBaseline[21] := 0.0;
+   aBaseline[22] := 0.0;
+   aBaseline[23] := 0.0;
+   aBaseline[24] := 0.0;
+   aBaseline[25] := 0.0;
+   aBaseline[26] := 0.0;
+   aBaseline[27] := 0.0;
+   aBaseline[28] := 0.0;
+   aBaseline[29] := 0.0;
+   aBaseline[30] := 0.0;
+   aBaseline[31] := 0.0;
+   aBaseline[32] := 0.0;
+   aBaseline[33] := 0.0;
+   aBaseline[34] := 0.0;
+   aBaseline[35] := 0.0;
+   aBaseline[36] := 0.0;
+   aBaseline[37] := 0.0;
+   aBaseline[38] := 0.0;
+   aBaseline[39] := 0.0;
+   aBaseline[40] := 0.0;
+   aBaseline[41] := 0.0;
+   aBaseline[42] := 0.0;
+   aBaseline[43] := 0.0;
+   aBaseline[44] := 0.0;
+   aBaseline[45] := 0.0;
+   aBaseline[46] := 0.0;
+   aBaseline[47] := 0.0;
+   aBaseline[48] := 0.0;
+   aBaseline[49] := 0.0;
+   aBaseline[50] := 0.0;
+   aBaseline[51] := 0.0;
+   aBaseline[52] := 0.0;
+   aBaseline[53] := 0.0;
+   aBaseline[54] := 0.0;
+   aBaseline[55] := 0.0;
+   aBaseline[56] := 0.0;
+   aBaseline[57] := 0.0;
+   aBaseline[58] := 0.0;
+   aBaseline[59] := 0.0;
+   aBaseline[60] := 0.0;
+   aBaseline[61] := 0.0;
+   aBaseline[62] := 0.0;
+   aBaseline[63] := 0.0;
+   aBaseline[64] := 0.0;
+   aBaseline[65] := 0.0;
+   aBaseline[66] := 0.0;
+   aBaseline[67] := 0.0;
+   aBaseline[68] := 0.0;
+   aBaseline[69] := 0.0;
+   aBaseline[70] := 0.0;
+   aBaseline[71] := 0.0;
+   aBaseline[72] := 0.0;
+   aBaseline[73] := 0.0;
+   aBaseline[74] := 0.0;
+   aBaseline[75] := 0.0;
+   aBaseline[76] := 0.0;
+   aBaseline[77] := 0.0;
+   aBaseline[78] := 0.0;
+   aBaseline[79] := 0.0;
+   aBaseline[80] := 0.0;
+   aBaseline[81] := 0.0;
+   aBaseline[82] := 0.0;
+   aBaseline[83] := 0.0;
+   aBaseline[84] := 0.0;
+   aBaseline[85] := 0.0;
+   aBaseline[86] := 0.0;
+   aBaseline[87] := 0.0;
+   aBaseline[88] := 0.0;
+   aBaseline[89] := 0.0;
+   aBaseline[90] := 0.0;
+   aBaseline[91] := 0.0;
+   aBaseline[92] := 0.0;
+   aBaseline[93] := 0.0;
+   aBaseline[94] := 0.0;
+   aBaseline[95] := 0.0;
+   aBaseline[96] := 0.0;
+   aBaseline[97] := 0.0;
+   aBaseline[98] := 0.0;
+   aBaseline[99] := 0.0;
+   aBaseline[100] := 0.0;
+   aBaseline[101] := 0.0;
+   aBaseline[102] := 0.0;
+   aBaseline[103] := 0.0;
+   aBaseline[104] := 0.0;
+   aBaseline[105] := 0.0;
+   aBaseline[106] := 0.0;
+   aBaseline[107] := 0.0;
+   aBaseline[108] := 0.0;
+   aBaseline[109] := 0.0;
+   aBaseline[110] := 0.0;
+   aBaseline[111] := 0.0;
+   aBaseline[112] := 0.0;
+   aBaseline[113] := 0.0;
+   aBaseline[114] := 0.0;
+   aBaseline[115] := 0.0;
+   aBaseline[116] := 0.0;
+   aBaseline[117] := 0.0;
+   aBaseline[118] := 0.0;
+   aBaseline[119] := 0.0;
+   aBaseline[120] := 0.0;
+   aBaseline[121] := 0.0;
+   aBaseline[122] := 0.0;
+   aBaseline[123] := 0.0;
+   aBaseline[124] := 0.0;
+   aBaseline[125] := 0.0;
+   aBaseline[126] := 0.0;
+   aBaseline[127] := 0.0;
+   aBaseline[128] := 0.0;
+   aBaseline[129] := 0.0;
+   aBaseline[130] := 0.0;
+   aBaseline[131] := 0.0;
+   aBaseline[132] := 0.0;
+   aBaseline[133] := 0.0;
+   aBaseline[134] := 0.0;
+   aBaseline[135] := 0.0;
+   aBaseline[136] := 0.0;
+   aBaseline[137] := 0.0;
+   aBaseline[138] := 0.0;
+   aBaseline[139] := 0.0;
+   aBaseline[140] := 0.0;
+   aBaseline[141] := 0.0;
+   aBaseline[142] := 0.0;
+   aBaseline[143] := 0.0;
+   aBaseline[144] := 0.0;
+   aBaseline[145] := 0.0;
+   aBaseline[146] := 0.0;
+   aBaseline[147] := 0.0;
+   aBaseline[148] := 0.0;
+   aBaseline[149] := 0.0;
+   aBaseline[150] := 0.0;
+   aBaseline[151] := 0.0;
+   aBaseline[152] := 0.0;
+   aBaseline[153] := 0.0;
+   aBaseline[154] := 0.0;
+   aBaseline[155] := 0.0;
+   aBaseline[156] := 0.0;
+   aBaseline[157] := 0.0;
+   aBaseline[158] := 0.0;
+   aBaseline[159] := 0.0;
+   aBaseline[160] := 0.0;
+   aBaseline[161] := 0.0;
+   aBaseline[162] := 0.0;
+   aBaseline[163] := 0.0;
+   aBaseline[164] := 0.0;
+   aBaseline[165] := 0.0;
+   aBaseline[166] := 0.0;
+   aBaseline[167] := 0.0;
+   aBaseline[168] := 0.0;
+   aBaseline[169] := 0.0;
+   aBaseline[170] := 0.0;
+   aBaseline[171] := 0.0;
+   aBaseline[172] := 0.0;
+   aBaseline[173] := 0.0;
+   aBaseline[174] := 0.0;
+   aBaseline[175] := 0.0;
+   aBaseline[176] := 0.0;
+   aBaseline[177] := 0.0;
+   aBaseline[178] := 0.0;
+   aBaseline[179] := 0.0;
+   aBaseline[180] := 0.0;
+   aBaseline[181] := 0.0;
+   aBaseline[182] := 0.0;
+   aBaseline[183] := 0.0;
+   aBaseline[184] := 0.0;
+   aBaseline[185] := 0.0;
+   aBaseline[186] := 0.0;
+   aBaseline[187] := 0.0;
+   aBaseline[188] := 0.0;
+   aBaseline[189] := 0.0;
+   aBaseline[190] := 0.0;
+   aBaseline[191] := 0.0;
+   aBaseline[192] := 0.0;
+   aBaseline[193] := 0.0;
+   aBaseline[194] := 0.0;
+   aBaseline[195] := 0.0;
+   aBaseline[196] := 0.0;
+   aBaseline[197] := 0.0;
+   aBaseline[198] := 0.0;
+   aBaseline[199] := 0.0;
+   aBaseline[200] := 0.0;
+   baselineValida := TRUE;
+   OldDirLavoro := 2;
+   AuxFpCambioDirezione := FALSE;
+
+END_DATA_BLOCK
+

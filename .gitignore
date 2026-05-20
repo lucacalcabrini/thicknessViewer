@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.spec
+.env
+*.log
+*.exe
+_thickness_update.bat
+# Database archivio (43 MB, generato/aggiornato a runtime)
+*.sqlite
+*.sqlite-journal
+*.db-journal

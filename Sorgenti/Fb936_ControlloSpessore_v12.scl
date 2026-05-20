@@ -1,0 +1,636 @@
+﻿FUNCTION_BLOCK "Fb936_ControlloSpessore_v12"
+{ S7_Optimized_Access := 'FALSE' }
+VERSION : 1.2
+// =============================================================================
+//  Fb936_ControlloSpessore_v11  â€”  VERSION 1.2
+//
+//  MODIFICHE v1.2 rispetto alla v1.1
+//    - AGGIUNTO I_SpessoreAtteso : Real (VAR_INPUT)
+//        Spessore nominale del disco di produzione corrente [mm].
+//        Disaccoppia il disco di TARATURA dal disco di PRODUZIONE:
+//          SpessoreDiscoRiferimento â†’ usato SOLO per costruire la baseline
+//          I_SpessoreAtteso         â†’ usato per il confronto NOK in produzione
+//        Consente di cambiare il formato del disco (1.1mm ... 3.1mm) senza
+//        dover eseguire una nuova taratura, finchÃ© il banco non cambia.
+//    - FIX commenti: aProfiloDelta ora correttamente descritto come
+//        (aProfiloSpessore - I_SpessoreAtteso), non piÃ¹ vs SpessoreDiscoRiferimento
+//    - FIX typo nome variabile: I_SPessoreAtteso â†’ I_SpessoreAtteso
+//
+//  MODIFICHE v1.1 rispetto alla v1.0
+//    - FIX CRITICO: rilevamento NOK corretto da aProfiloSpessore a aProfiloDelta
+//        La soglia SpessoreMassimo si confronta con l'ECCESSO rispetto allo
+//        spessore atteso, non con lo spessore assoluto.
+//    - FIX: aggiunto AppNcelleFuoriSoglia in VAR (era solo TEMP â†’ azzerato ogni ciclo)
+//    - FIX: corretto commento errato in STEP 1
+//    - NOTA: AuxFpCambioDirezione mantenuta in VAR per compatibilitÃ  DB istanza
+//
+//  MODIFICHE v1.0 rispetto alla v0.2
+//    - Rilevamento doppio disco basato su aProfiloSpessore (compensato baseline)
+//      e non piÃ¹ sul buffer temporale Dati[0..100]
+//    - nLettureConsecutiveAllarme: conteggio POSIZIONALE celle consecutive NOK
+//    - Laser range validation su I_Spessore_mm (valore grezzo pre-inversione)
+//    - Nuove uscite O_nCelleFuoriSoglia e O_LaserInRange
+//    - Mappatura indice array bidirezionale (direction-aware)
+//    - Invalidazione baseline automatica su cambio I_DirLavoro
+//
+//  PRINCIPIO FISICO (laser posizionato SOTTO il piano di trasferimento):
+//    Il laser misura la quota della superficie INFERIORE del disco.
+//    Quota alta = disco sottile (o assente), quota bassa = disco spesso.
+//
+//    Taratura (una tantum per banco, con disco campione noto):
+//      aBaseline[i] = media(laser_cal[i]) + SpessoreDiscoRiferimento
+//                   = QUOTA DEL SUPPORTO (invariante geometrico del banco)
+//      â†’ SpessoreDiscoRiferimento serve SOLO qui. Dopo la taratura non Ã¨ piÃ¹ usato.
+//
+//    Misura (ogni passata di produzione):
+//      aProfiloSpessore[i] = aBaseline[i] - media(laser[i])
+//                          = spessore REALE del disco in posizione i [mm]
+//
+//    Controllo NOK:
+//      aProfiloDelta[i] = aProfiloSpessore[i] - I_SpessoreAtteso
+//                       = eccesso rispetto allo spessore nominale di produzione
+//                       â‰ˆ 0 per disco ok, >0 per disco piÃ¹ spesso del target
+//      NOK se aProfiloDelta[i] > SpessoreMassimo  (tolleranza massima)
+//
+//  SEPARAZIONE DEI RUOLI:
+//    SpessoreDiscoRiferimento  [UDT] â†’ spessore disco campione di taratura [mm]
+//                                       (es. 2.98mm, cambia solo a nuova taratura)
+//    I_SpessoreAtteso          [VAR_INPUT] â†’ spessore nominale disco di produzione [mm]
+//                                       (es. 1.1mm, 2.1mm, 3.1mm â€” cambia ogni cambio formato)
+//    SpessoreMassimo           [UDT] â†’ tolleranza massima su aProfiloDelta [mm]
+//                                       (es. 1.0mm â†’ NOK se spessore > atteso + 1.0mm)
+//
+//  ESEMPIO:
+//    Taratura con disco da 2.98mm â†’ aBaseline costruita
+//    Produzione con disco da 1.1mm:
+//      I_SpessoreAtteso = 1.1,  SpessoreMassimo = 1.0
+//      Disco ok (1.1mm):      aProfiloDelta â‰ˆ 0.00mm â†’ OK  âœ“
+//      Doppio disco (2.2mm):  aProfiloDelta â‰ˆ 1.10mm > 1.0 â†’ NOK âœ“
+//    Cambio formato, produzione con disco da 3.1mm:
+//      I_SpessoreAtteso = 3.1  (nessuna ritaratura necessaria)
+//      Disco ok (3.1mm):      aProfiloDelta â‰ˆ 0.00mm â†’ OK  âœ“
+//      Doppio disco (6.2mm):  aProfiloDelta â‰ˆ 3.10mm > 1.0 â†’ NOK âœ“
+//
+//  UDT "UdtControlloSpessore":
+//    PosizioneCentroVentosa     : Real   centro zona misura [mm]
+//    RangeControllo             : Real   semi-ampiezza zona misura [mm]
+//    RangeRallenta              : Real   zona aggiuntiva decelerazione [mm]
+//    nLettureConsecutiveAllarme : Real   N celle consecutive > soglia per NOK [n]
+//    SpessoreMassimo            : Real   tolleranza max su aProfiloDelta [mm]
+//    OvrTrasfertPerpassaggio    : LReal  override velocitÃ  in zona attiva [%]
+//    DisabilitaControllo        : Bool   bypass completo del controllo
+//    AbilitaTaratura            : Bool   fronte salita = avvia passata di taratura
+//    SpessoreDiscoRiferimento   : Real   spessore disco campione di taratura [mm]
+// =============================================================================
+   VAR_INPUT 
+      I_ParametriCntrolloSpessore : "UdtControlloSpessore";
+      I_Spessore_mm : Real;   // [mm] lettura laser grezza (pre-inversione)
+      I_InvertiLettura : Bool;   // TRUE â†’ Spessore_mm = I_Spessore_mm * (-1)
+      I_PiecePresence : Bool;   // segnale presenza disco (sensore esterno)
+      I_ActPosition : LReal;   // [mm] posizione corrente asse trasfert
+      I_ActSpeed : LReal;   // [mm/s] velocitÃ  corrente asse trasfert
+      I_DirLavoro : Int;   // 0=entrambe  1=solo positive  2=solo negative
+      I_MaxRangeLaser : Real;   // [mm] limite superiore range fisico sensore
+      I_MinRangeLaser : Real;   // [mm] limite inferiore range fisico sensore
+      I_SpessoreAtteso : Real;   // [mm] spessore nominale disco di produzione corrente      Cambia ad ogni cambio formato, NON richiede ritaratura
+   END_VAR
+
+   VAR_OUTPUT 
+      O_SpessoreOk : Bool;
+      O_SpessoreNOK : Bool;
+      O_AlmControlloDisattivo : Bool;
+      O_TaraturaAttiva : Bool;   // TRUE durante acquisizione passata di taratura
+      O_TaraturaCompletata : Bool;   // TRUE se baseline valida disponibile
+      O_SpessoreMedio : Real;   // [mm] spessore medio passata (assoluto, post-baseline)
+      O_SpessoreMax : Real;   // [mm] spessore massimo passata
+      O_DeltaMedio : Real;   // [mm] delta medio vs I_SpessoreAtteso
+      O_DeltaMax : Real;   // [mm] delta massimo vs I_SpessoreAtteso
+      O_nCelleProfilo : Int;   // [n] celle con almeno 1 campione valido
+      O_nCelleFuoriSoglia : Int;   // [n] celle con aProfiloDelta > SpessoreMassimo
+      O_LaserInRange : Bool;   // TRUE = lettura laser nel range fisico valido
+   END_VAR
+
+   VAR_IN_OUT 
+      IO_OvrAuto : LReal;
+      IO_OvrMan : LReal;
+   END_VAR
+
+   VAR 
+      Pinza : Struct
+         InZonaControllo : Bool;
+         InZonaRallenta : Bool;
+         OvrAutoOld { S7_SetPoint := 'True'} : LReal;
+         OvrManOld { S7_SetPoint := 'True'} : LReal;
+         nLettureConsecutive : Real;   // run corrente celle consecutive sopra soglia (diagnostica)
+      END_STRUCT;
+      aBaseline { S7_SetPoint := 'True'} : Array[0..#MaxData] of Real;   // [mm] quota del supporto per posizione = media(laser_cal) + SpessoreDiscoRiferimento Invariante geometrico del banco. Costruita una volta per taratura.
+      baselineValida { S7_SetPoint := 'True'} : Bool;
+      Fp {InstructionName := 'R_TRIG'; LibVersion := '1.0'; S7_SetPoint := 'False'} : R_TRIG;
+      Fn {InstructionName := 'F_TRIG'; LibVersion := '1.0'; S7_SetPoint := 'False'} : F_TRIG;
+      FpSlowing {InstructionName := 'R_TRIG'; LibVersion := '1.0'; S7_SetPoint := 'False'} : R_TRIG;
+      FnSlowing {InstructionName := 'F_TRIG'; LibVersion := '1.0'; S7_SetPoint := 'False'} : F_TRIG;
+      FpTaratura {InstructionName := 'R_TRIG'; LibVersion := '1.0'; S7_SetPoint := 'False'} : R_TRIG;
+      DirOk : Bool;
+      Ripeti : Bool;   // forzatura rielaborazione (solo debug/test)
+      AppMinIndexSurce { S7_SetPoint := 'True'} : Int;   // deprecato v1.0, mantenuto per compat DB
+      AppMaxIndexSurce { S7_SetPoint := 'True'} : Int;   // deprecato v1.0
+      AppMaxIndex { S7_SetPoint := 'True'} : Int;   // deprecato v1.0
+      taraturaInCorso : Bool;   // TRUE = passata corrente Ã¨ passata di taratura Buffer accumulatori passata misura corrente
+      aSomRaw : Array[0..#MaxData] of Real;   // somma letture laser per cella
+      aNraw : Array[0..#MaxData] of Int;   // contatore campioni per cella Buffer accumulatori passata di taratura
+      aSomCal : Array[0..#MaxData] of Real;
+      aNcal : Array[0..#MaxData] of Int;   // Profilo ultima passata (mantenuto tra cicli per HMI)
+      aProfiloSpessore : Array[0..#MaxData] of Real;   // [mm] spessore assoluto per cella
+      aProfiloDelta : Array[0..#MaxData] of Real;   // [mm] delta vs I_SpessoreAtteso per cella Scalari ultima passata
+      AppSpessoreOk : Bool;
+      AppSpessoreNok : Bool;
+      AppSpessoreMedio : Real;
+      AppSpessoreMax : Real;
+      AppDeltaMedio : Real;
+      AppDeltaMax : Real;
+      AppNcelleProfilo : Int;
+      AppNcelleFuoriSoglia : Int;   // v1.1: in VAR â†’ mantiene valore tra cicli OB
+      AppValidValue : Bool;
+      OldDirLavoro { S7_SetPoint := 'True'} : Int;
+      AuxFpCambioDirezione { S7_SetPoint := 'True'} : Bool;   // per compat DB, non implementata
+      IdLettura : DInt;
+   END_VAR
+
+   VAR_TEMP 
+      Max : Real;
+      Min : Real;
+      Spessore_mm : Real;   // lettura laser dopo applicazione InvertiLettura
+      i : Int;
+      idx : Int;
+      posInizio : Real;
+      risoluzione : Real;
+      tempR : Real;
+      nLettureTot : Int;
+      nCelleFuori : Int;
+      ActPosition : Real;
+      ActSpeed : Real;
+   END_VAR
+
+   VAR CONSTANT 
+      "Rv0+" : Real := 1.0;
+      "Rv0-" : Real := -1.0;
+      MaxData : Int := 200;   // Array [0..200] = 201 celle Risoluzione = 2 * RangeControllo / MaxData Con RangeControllo = 80mm â†’ 2*80/200 = 0.80 mm/cella
+   END_VAR
+
+
+BEGIN
+	// =============================================================================
+	//  Fb936_ControlloSpessore_v12  —  VERSION 1.2
+	//
+	//  MODIFICHE v1.2 rispetto alla v1.1
+	//    - AGGIUNTO I_SpessoreAtteso : Real (VAR_INPUT)
+	//        Spessore nominale del disco di produzione corrente [mm].
+	//        Disaccoppia il disco di TARATURA dal disco di PRODUZIONE:
+	//          SpessoreDiscoRiferimento → usato SOLO per costruire la baseline
+	//          I_SpessoreAtteso         → usato per il confronto NOK in produzione
+	//        Consente di cambiare il formato del disco (1.1mm ... 3.1mm) senza
+	//        dover eseguire una nuova taratura, finché il banco non cambia.
+	//    - FIX commenti: aProfiloDelta ora correttamente descritto come
+	//        (aProfiloSpessore - I_SpessoreAtteso), non più vs SpessoreDiscoRiferimento
+	//    - FIX typo nome variabile: I_SPessoreAtteso → I_SpessoreAtteso
+	//
+	//  MODIFICHE v1.1 rispetto alla v1.0
+	//    - FIX CRITICO: rilevamento NOK corretto da aProfiloSpessore a aProfiloDelta
+	//        La soglia SpessoreMassimo si confronta con l'ECCESSO rispetto allo
+	//        spessore atteso, non con lo spessore assoluto.
+	//    - FIX: aggiunto AppNcelleFuoriSoglia in VAR (era solo TEMP → azzerato ogni ciclo)
+	//    - FIX: corretto commento errato in STEP 1
+	//    - NOTA: AuxFpCambioDirezione mantenuta in VAR per compatibilità DB istanza
+	//
+	//  MODIFICHE v1.0 rispetto alla v0.2
+	//    - Rilevamento doppio disco basato su aProfiloSpessore (compensato baseline)
+	//      e non più sul buffer temporale Dati[0..100]
+	//    - nLettureConsecutiveAllarme: conteggio POSIZIONALE celle consecutive NOK
+	//    - Laser range validation su I_Spessore_mm (valore grezzo pre-inversione)
+	//    - Nuove uscite O_nCelleFuoriSoglia e O_LaserInRange
+	//    - Mappatura indice array bidirezionale (direction-aware)
+	//    - Invalidazione baseline automatica su cambio I_DirLavoro
+	//
+	//  PRINCIPIO FISICO (laser posizionato SOTTO il piano di trasferimento):
+	//    Il laser misura la quota della superficie INFERIORE del disco.
+	//    Quota alta = disco sottile (o assente), quota bassa = disco spesso.
+	//
+	//    Taratura (una tantum per banco, con disco campione noto):
+	//      aBaseline[i] = media(laser_cal[i]) + SpessoreDiscoRiferimento
+	//                   = QUOTA DEL SUPPORTO (invariante geometrico del banco)
+	//      → SpessoreDiscoRiferimento serve SOLO qui. Dopo la taratura non è più usato.
+	//
+	//    Misura (ogni passata di produzione):
+	//      aProfiloSpessore[i] = aBaseline[i] - media(laser[i])
+	//                          = spessore REALE del disco in posizione i [mm]
+	//
+	//    Controllo NOK:
+	//      aProfiloDelta[i] = aProfiloSpessore[i] - I_SpessoreAtteso
+	//                       = eccesso rispetto allo spessore nominale di produzione
+	//                       ≈ 0 per disco ok, >0 per disco più spesso del target
+	//      NOK se aProfiloDelta[i] > SpessoreMassimo  (tolleranza massima)
+	//
+	//  SEPARAZIONE DEI RUOLI:
+	//    SpessoreDiscoRiferimento  [UDT] → spessore disco campione di taratura [mm]
+	//                                       (es. 2.98mm, cambia solo a nuova taratura)
+	//    I_SpessoreAtteso          [VAR_INPUT] → spessore nominale disco di produzione [mm]
+	//                                       (es. 1.1mm, 2.1mm, 3.1mm — cambia ogni cambio formato)
+	//    SpessoreMassimo           [UDT] → tolleranza massima su aProfiloDelta [mm]
+	//                                       (es. 1.0mm → NOK se spessore > atteso + 1.0mm)
+	//
+	//  ESEMPIO:
+	//    Taratura con disco da 2.98mm → aBaseline costruita
+	//    Produzione con disco da 1.1mm:
+	//      I_SpessoreAtteso = 1.1,  SpessoreMassimo = 1.0
+	//      Disco ok (1.1mm):      aProfiloDelta ≈ 0.00mm → OK  ✓
+	//      Doppio disco (2.2mm):  aProfiloDelta ≈ 1.10mm > 1.0 → NOK ✓
+	//    Cambio formato, produzione con disco da 3.1mm:
+	//      I_SpessoreAtteso = 3.1  (nessuna ritaratura necessaria)
+	//      Disco ok (3.1mm):      aProfiloDelta ≈ 0.00mm → OK  ✓
+	//      Doppio disco (6.2mm):  aProfiloDelta ≈ 3.10mm > 1.0 → NOK ✓
+	//
+	//  UDT "UdtControlloSpessore":
+	//    PosizioneCentroVentosa     : Real   centro zona misura [mm]
+	//    RangeControllo             : Real   semi-ampiezza zona misura [mm]
+	//    RangeRallenta              : Real   zona aggiuntiva decelerazione [mm]
+	//    nLettureConsecutiveAllarme : Real   N celle consecutive > soglia per NOK [n]
+	//    SpessoreMassimo            : Real   tolleranza max su aProfiloDelta [mm]
+	//    OvrTrasfertPerpassaggio    : LReal  override velocità in zona attiva [%]
+	//    DisabilitaControllo        : Bool   bypass completo del controllo
+	//    AbilitaTaratura            : Bool   fronte salita = avvia passata di taratura
+	//    SpessoreDiscoRiferimento   : Real   spessore disco campione di taratura [mm]
+	// =============================================================================
+	
+	REGION Conversione LReal → Real
+	    // Conversione una tantum per evitare cast ripetuti in tutta la funzione
+	    #ActPosition := LREAL_TO_REAL(#I_ActPosition);
+	    #ActSpeed := LREAL_TO_REAL(#I_ActSpeed);
+	END_REGION
+	
+	
+	REGION Zone di controllo e mappatura posizione → indice array
+	    
+	    // ── Direzione di moto valida ──────────────────────────────────────────
+	    CASE #I_DirLavoro OF
+	        0:  // entrambe le direzioni
+	            #DirOk := (#ActSpeed < #"Rv0-") OR (#ActSpeed > #"Rv0+");
+	        1:  // solo positive
+	            #DirOk := (#ActSpeed > #"Rv0+");
+	        2:  // solo negative
+	            #DirOk := (#ActSpeed < #"Rv0-");
+	        ELSE
+	            #DirOk := FALSE;
+	    END_CASE;
+	    
+	    // ── Zona di controllo (finestra laser attiva) ─────────────────────────
+	    #Max := #I_ParametriCntrolloSpessore.PosizioneCentroVentosa
+	    + #I_ParametriCntrolloSpessore.RangeControllo;
+	    #Min := #I_ParametriCntrolloSpessore.PosizioneCentroVentosa
+	    - #I_ParametriCntrolloSpessore.RangeControllo;
+	    #Pinza.InZonaControllo := (#ActPosition >= #Min)
+	    AND (#ActPosition <= #Max)
+	    AND #DirOk
+	    AND (#I_PiecePresence OR #taraturaInCorso);
+	    // NOTA: taraturaInCorso bypassa I_PiecePresence per permettere
+	    //       la taratura anche senza sensore di presenza pezzo attivo.
+	    
+	    // ── Zona di rallentamento (pre-decelerazione) ─────────────────────────
+	    #Max := #I_ParametriCntrolloSpessore.PosizioneCentroVentosa
+	    + #I_ParametriCntrolloSpessore.RangeControllo
+	    + #I_ParametriCntrolloSpessore.RangeRallenta;
+	    #Min := #I_ParametriCntrolloSpessore.PosizioneCentroVentosa
+	    - #I_ParametriCntrolloSpessore.RangeControllo
+	    - #I_ParametriCntrolloSpessore.RangeRallenta;
+	    #Pinza.InZonaRallenta := (#ActPosition >= #Min)
+	    AND (#ActPosition <= #Max)
+	    AND #DirOk
+	    AND (#I_PiecePresence OR #taraturaInCorso);
+	    
+	    // ── Mappatura posizione → indice array [0..MaxData] ──────────────────
+	    // L'indice cresce sempre nella direzione di percorrenza:
+	    //   idx=0   → ingresso nella zona (bordo di arrivo)
+	    //   idx=200 → uscita dalla zona  (bordo di partenza)
+	    // Baseline e profilo sono sempre allineati indipendentemente dalla direzione.
+	    IF #I_ParametriCntrolloSpessore.RangeControllo > 0.0 THEN
+	        #risoluzione := (2.0 * #I_ParametriCntrolloSpessore.RangeControllo)
+	        / INT_TO_REAL(#MaxData);
+	    ELSE
+	        #risoluzione := 1.0;   // fallback: evita divisione per zero
+	    END_IF;
+	    
+	    CASE #I_DirLavoro OF
+	        0:  // entrambe: distingui per segno velocità
+	            IF #ActSpeed < #"Rv0-" THEN
+	                #posInizio := #I_ParametriCntrolloSpessore.PosizioneCentroVentosa
+	                + #I_ParametriCntrolloSpessore.RangeControllo;
+	                #idx := REAL_TO_INT((#posInizio - #ActPosition) / #risoluzione);
+	            ELSIF #ActSpeed > #"Rv0+" THEN
+	                #posInizio := #I_ParametriCntrolloSpessore.PosizioneCentroVentosa
+	                - #I_ParametriCntrolloSpessore.RangeControllo;
+	                #idx := REAL_TO_INT((#ActPosition - #posInizio) / #risoluzione);
+	            END_IF;
+	        1:  // solo positive
+	            #posInizio := #I_ParametriCntrolloSpessore.PosizioneCentroVentosa
+	            - #I_ParametriCntrolloSpessore.RangeControllo;
+	            #idx := REAL_TO_INT((#ActPosition - #posInizio) / #risoluzione);
+	        2:  // solo negative
+	            #posInizio := #I_ParametriCntrolloSpessore.PosizioneCentroVentosa
+	            + #I_ParametriCntrolloSpessore.RangeControllo;
+	            #idx := REAL_TO_INT((#posInizio - #ActPosition) / #risoluzione);
+	    END_CASE;
+	    
+	END_REGION
+	
+	
+	REGION Validazione range laser
+	    
+	    // Validazione sul valore GREZZO (pre-inversione logica).
+	    // I limiti rappresentano il range fisico del sensore (es. 10..200mm),
+	    // indipendenti dalla polarità configurata via I_InvertiLettura.
+	    #AppValidValue := (#I_Spessore_mm >= #I_MinRangeLaser)
+	    AND (#I_Spessore_mm <= #I_MaxRangeLaser);
+	    
+	END_REGION
+	
+	
+	REGION Inversione lettura laser
+	    
+	    // Con laser dal basso: la quota decresce all'aumentare dello spessore.
+	    // I_InvertiLettura = FALSE → Spessore_mm = lettura diretta (quota)
+	    // I_InvertiLettura = TRUE  → per installazioni con polarità invertita
+	    IF #I_InvertiLettura THEN
+	        #Spessore_mm := #I_Spessore_mm * -1.0;
+	    ELSE
+	        #Spessore_mm := #I_Spessore_mm;
+	    END_IF;
+	    
+	END_REGION
+	
+	
+	REGION Override velocità in zona
+	    
+	    // Salva l'override corrente all'ingresso nella zona di rallentamento
+	    // e ripristina all'uscita. Non riduce se già sotto il target.
+	    #FpSlowing(CLK := #Pinza.InZonaRallenta);
+	    #FnSlowing(CLK := #Pinza.InZonaRallenta);
+	    
+	    IF #FpSlowing.Q THEN
+	        #Pinza.OvrAutoOld := #IO_OvrAuto;
+	        #Pinza.OvrManOld := #IO_OvrMan;
+	        IF #IO_OvrAuto > #I_ParametriCntrolloSpessore.OvrTrasfertPerpassaggio THEN
+	            #IO_OvrAuto := #I_ParametriCntrolloSpessore.OvrTrasfertPerpassaggio;
+	        END_IF;
+	        IF #IO_OvrMan > #I_ParametriCntrolloSpessore.OvrTrasfertPerpassaggio THEN
+	            #IO_OvrMan := #I_ParametriCntrolloSpessore.OvrTrasfertPerpassaggio;
+	        END_IF;
+	    END_IF;
+	    
+	    IF #FnSlowing.Q THEN
+	        #IO_OvrAuto := #Pinza.OvrAutoOld;
+	        #IO_OvrMan := #Pinza.OvrManOld;
+	    END_IF;
+	    
+	END_REGION
+	
+	
+	REGION Avvio taratura
+	    
+	    // Sequenza taratura:
+	    //   1. Impostare SpessoreDiscoRiferimento con il valore noto del disco campione
+	    //   2. Portare AbilitaTaratura = TRUE  (con asse FUORI dalla zona di controllo)
+	    //   3. Far passare il disco campione normalmente
+	    //   4. Aspettare O_TaraturaCompletata = TRUE
+	    //   5. Resettare AbilitaTaratura = FALSE dall'HMI
+	    //
+	    // Risultato:
+	    //   aBaseline[i] = media(laser_cal[i]) + SpessoreDiscoRiferimento
+	    //                = QUOTA DEL SUPPORTO (invariante geometrico del banco)
+	    // Dopo questa operazione SpessoreDiscoRiferimento non è più usato fino
+	    // alla prossima taratura. I_SpessoreAtteso gestisce i cambi formato.
+	    
+	    #FpTaratura(CLK := #I_ParametriCntrolloSpessore.AbilitaTaratura);
+	    
+	    IF #FpTaratura.Q AND NOT #Pinza.InZonaControllo THEN
+	        #taraturaInCorso := TRUE;
+	        #baselineValida := FALSE;
+	        FOR #i := 0 TO #MaxData DO
+	            #aSomCal[#i] := 0.0;
+	            #aNcal[#i] := 0;
+	        END_FOR;
+	    END_IF;
+	    
+	    // Cambio direzione di lavoro → baseline non più valida (indici invertiti)
+	    IF #I_DirLavoro <> #OldDirLavoro THEN
+	        #baselineValida := FALSE;
+	        #OldDirLavoro := #I_DirLavoro;
+	    END_IF;
+	    
+	END_REGION
+	
+	
+	REGION Controllo spessore
+	    
+	    #Fp(CLK := #Pinza.InZonaControllo);
+	    #Fn(CLK := #Pinza.InZonaControllo);
+	    
+	    // ═══ RESET all'ingresso zona ══════════════════════════════════════════
+	    IF #Fp.Q THEN
+	        #Pinza.nLettureConsecutive := 0.0;
+	        #AppSpessoreOk := FALSE;
+	        #AppSpessoreNok := FALSE;
+	        #AppMinIndexSurce := 0;
+	        #AppMaxIndexSurce := 0;
+	        #AppMaxIndex := 0;
+	        // Reset buffer misura solo se NON in taratura
+	        IF NOT #taraturaInCorso THEN
+	            FOR #i := 0 TO #MaxData DO
+	                #aSomRaw[#i] := 0.0;
+	                #aNraw[#i] := 0;
+	            END_FOR;
+	        END_IF;
+	    END_IF;
+	    
+	    // ═══ ACQUISIZIONE (gate su AppValidValue) ════════════════════════════
+	    // AppValidValue = FALSE → campione scartato (laser fuori range fisico,
+	    //   riflessione anomala, asse in fase di accelerazione).
+	    IF #Pinza.InZonaControllo AND #AppValidValue THEN
+	        IF #idx < 0 THEN
+	            #idx := 0;
+	        END_IF;
+	        IF #idx > #MaxData THEN
+	            #idx := #MaxData;
+	        END_IF;
+	        
+	        IF #taraturaInCorso THEN
+	            #aSomCal[#idx] := #aSomCal[#idx] + #Spessore_mm;
+	            #aNcal[#idx] := #aNcal[#idx] + 1;
+	        ELSE
+	            #aSomRaw[#idx] := #aSomRaw[#idx] + #Spessore_mm;
+	            #aNraw[#idx] := #aNraw[#idx] + 1;
+	        END_IF;
+	    END_IF;
+	    
+	    // ═══ FINE PASSATA: elaborazione risultati ════════════════════════════
+	    IF (#Fn.Q OR #Ripeti) THEN
+	        
+	        IF #taraturaInCorso THEN
+	            // ─── RAMO TARATURA ────────────────────────────────────────────
+	            // Calcola quota supporto (invariante geometrico del banco):
+	            //   aBaseline[i] = media(laser_cal[i]) + SpessoreDiscoRiferimento
+	            // Celle non attraversate dal disco campione → aBaseline[i] = 0.0
+	            //   → aProfiloSpessore = 0 - laser = valore negativo → mai NOK (sicuro)
+	            FOR #i := 0 TO #MaxData DO
+	                IF #aNcal[#i] > 0 THEN
+	                    #aBaseline[#i] := (#aSomCal[#i] / INT_TO_REAL(#aNcal[#i]))
+	                    + #I_ParametriCntrolloSpessore.SpessoreDiscoRiferimento;
+	                ELSE
+	                    #aBaseline[#i] := 0.0;
+	                END_IF;
+	                #aSomCal[#i] := 0.0;   // pulizia per eventuale ri-taratura
+	                #aNcal[#i] := 0;
+	            END_FOR;
+	            #baselineValida := TRUE;
+	            #taraturaInCorso := FALSE;
+	            // Passata di taratura: giudizio neutro (non OK né NOK)
+	            #AppSpessoreOk := TRUE;
+	            #AppSpessoreNok := FALSE;
+	            #AppNcelleFuoriSoglia := 0;
+	            
+	        ELSE
+	            // ─── RAMO MISURA NORMALE ──────────────────────────────────────
+	            
+	            // STEP 1: costruzione profilo posizionale e scalari di sintesi
+	            //
+	            //   aProfiloSpessore[i] = aBaseline[i] - media(aSomRaw[i])
+	            //                       = quota_supporto - quota_laser_disco
+	            //                       = SPESSORE REALE del disco in posizione i [mm]
+	            //
+	            //   aProfiloDelta[i] = aProfiloSpessore[i] - I_SpessoreAtteso
+	            //                    = eccesso rispetto allo spessore nominale di produzione
+	            //                    ≈ 0 per disco corretto
+	            //                    > 0 per disco più spesso del target (es. doppio disco)
+	            //
+	            //   Se baseline NON tarata (aBaseline[i]=0):
+	            //     aProfiloSpessore[i] = 0 - laser = valore negativo
+	            //     aProfiloDelta = negativo → mai > SpessoreMassimo → mai NOK (sicuro)
+	            //     Richiedere taratura prima dell'uso in produzione.
+	            //
+	            //   Celle non campionate (aNraw=0): mantengono il valore della passata
+	            //   precedente → profilo continuo sull'HMI. Il check NOK usa aNraw > 0.
+	            
+	            #AppSpessoreMedio := 0.0;
+	            #AppSpessoreMax := 0.0;
+	            #AppDeltaMedio := 0.0;
+	            #AppDeltaMax := 0.0;
+	            #nLettureTot := 0;
+	            
+	            FOR #i := 0 TO #MaxData DO
+	                IF #aNraw[#i] > 0 THEN
+	                    // Media letture laser nella cella i
+	                    #tempR := #aSomRaw[#i] / INT_TO_REAL(#aNraw[#i]);
+	                    
+	                    // Spessore reale (quota supporto - quota laser)
+	                    #aProfiloSpessore[#i] := #aBaseline[#i] - #tempR;
+	                    
+	                    // Delta vs spessore nominale di produzione
+	                    #aProfiloDelta[#i] := #aProfiloSpessore[#i] - #I_SpessoreAtteso;
+	                    
+	                    // Accumulo scalari
+	                    #AppSpessoreMedio := #AppSpessoreMedio + #aProfiloSpessore[#i];
+	                    #AppDeltaMedio := #AppDeltaMedio + #aProfiloDelta[#i];
+	                    IF #aProfiloSpessore[#i] > #AppSpessoreMax THEN
+	                        #AppSpessoreMax := #aProfiloSpessore[#i];
+	                    END_IF;
+	                    IF #aProfiloDelta[#i] > #AppDeltaMax THEN
+	                        #AppDeltaMax := #aProfiloDelta[#i];
+	                    END_IF;
+	                    
+	                    #nLettureTot := #nLettureTot + 1;
+	                END_IF;
+	            END_FOR;
+	            
+	            IF #nLettureTot > 0 THEN
+	                #AppSpessoreMedio := #AppSpessoreMedio / INT_TO_REAL(#nLettureTot);
+	                #AppDeltaMedio := #AppDeltaMedio / INT_TO_REAL(#nLettureTot);
+	            END_IF;
+	            #AppNcelleProfilo := #nLettureTot;
+	            
+	            
+	            // STEP 2: rilevamento doppio disco basato sul profilo posizionale
+	            //
+	            //   SpessoreMassimo = tolleranza massima [mm]
+	            //   NOK se aProfiloDelta[i] > SpessoreMassimo
+	            //     → spessore misurato > I_SpessoreAtteso + SpessoreMassimo
+	            //
+	            //   Esempio: I_SpessoreAtteso=1.1mm, SpessoreMassimo=1.0mm
+	            //     Disco ok (1.1mm):     delta ≈ 0.00 → non conta
+	            //     Doppio disco (2.2mm): delta ≈ 1.10 > 1.0 → conta
+	            //
+	            //   L'allarme scatta su un RUN di celle CONSECUTIVE sopra soglia
+	            //   >= nLettureConsecutiveAllarme.
+	            //   Un doppio disco fisico genera una zona continua di eccesso → corretto.
+	            //
+	            //   nCelleFuori = totale celle sopra soglia (diagnostica HMI)
+	            //   nLettureConsecutive = run corrente (trigger NOK)
+	            //
+	            //   NOTA: celle non campionate (aNraw=0) non resettano il run.
+	            //   Per copertura bassa valutare: ELSE nLettureConsecutive := 0.0
+	            
+	            #nCelleFuori := 0;
+	            #Pinza.nLettureConsecutive := 0.0;
+	            
+	            FOR #i := 0 TO #MaxData DO
+	                IF #aNraw[#i] > 0 THEN
+	                    IF #aProfiloDelta[#i] > #I_ParametriCntrolloSpessore.SpessoreMassimo THEN
+	                        #nCelleFuori := #nCelleFuori + 1;
+	                        #Pinza.nLettureConsecutive := #Pinza.nLettureConsecutive + 1.0;
+	                    ELSE
+	                        #Pinza.nLettureConsecutive := 0.0;  // reset: devono essere CONSECUTIVE
+	                    END_IF;
+	                END_IF;
+	            END_FOR;
+	            
+	            #AppNcelleFuoriSoglia := #nCelleFuori;  // in VAR → stabile tra cicli OB
+	            
+	            IF #Pinza.nLettureConsecutive >= #I_ParametriCntrolloSpessore.nLettureConsecutiveAllarme THEN
+	                #AppSpessoreNok := TRUE;
+	                #AppSpessoreOk := FALSE;
+	            ELSE
+	                #AppSpessoreNok := FALSE;
+	                #AppSpessoreOk := TRUE;
+	            END_IF;
+	            
+	        END_IF;   // fine IF taraturaInCorso
+	        
+	        #Ripeti := FALSE;
+	        
+	        IF #IdLettura > dint#32000 THEN
+	            #IdLettura := dint#0;
+	        ELSE
+	            #IdLettura := #IdLettura + dint#1;
+	        END_IF;
+	    END_IF;
+	    
+	END_REGION
+	
+	REGION Uscite
+	    
+	    #O_SpessoreNOK := NOT #I_ParametriCntrolloSpessore.DisabilitaControllo
+	    AND #AppSpessoreNok;
+	    #O_SpessoreOk := #I_ParametriCntrolloSpessore.DisabilitaControllo
+	    OR #AppSpessoreOk;
+	    #O_AlmControlloDisattivo := #I_ParametriCntrolloSpessore.DisabilitaControllo;
+	    #O_TaraturaAttiva := #taraturaInCorso;
+	    #O_TaraturaCompletata := #baselineValida;
+	    #O_SpessoreMedio := #AppSpessoreMedio;
+	    #O_SpessoreMax := #AppSpessoreMax;
+	    #O_DeltaMedio := #AppDeltaMedio;
+	    #O_DeltaMax := #AppDeltaMax;
+	    #O_nCelleProfilo := #AppNcelleProfilo;
+	    #O_nCelleFuoriSoglia := #AppNcelleFuoriSoglia;
+	    #O_LaserInRange := #AppValidValue;
+	    
+	END_REGION
+	ENO := TRUE;
+END_FUNCTION_BLOCK
+
