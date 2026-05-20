@@ -19,7 +19,7 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.5"
+APP_VERSION = "1.4.6"
 APP_BUILD   = "2026-05-20"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
@@ -883,8 +883,7 @@ class ThicknessApp(tk.Tk):
                 ("  📈 Delta  ",    self._tab_delta),
                 ("  🔌 PLC Reader  ",self._tab_plc),
                 ("  ⚡ Auto-Export  ",self._tab_autoexp),
-                ("  📚 History  ",  self._tab_history),
-                ("  ⚙ Impostazioni  ",self._tab_settings)]:
+                ("  📚 History  ",  self._tab_history)]:
             t=ttk.Frame(self._nb); self._nb.add(t,text=title); builder(t)
 
     # ══════════════════════════════════════════════════════════
@@ -1660,11 +1659,8 @@ class ThicknessApp(tk.Tk):
         dmax=sc.get('AppDeltaMax',0)
         ncelle=int(sc.get('AppNcelleProfilo',0))
 
-        # Label DB nello slot
         db_lbl = ""
         if slot:
-            lbl=slot['label'].get().strip()
-            db_lbl=f"[{lbl}] " if lbl else ""
             if is_tar:   slot['tar_count']+=1
             elif is_nok: slot['nok_count']+=1
             else:        slot['ok_count']+=1
@@ -1810,7 +1806,7 @@ class ThicknessApp(tk.Tk):
         dlg=tk.Toplevel(self)
         dlg.title("Impostazioni — Thickness Profiler")
         dlg.configure(bg=DARK_BG)
-        dlg.geometry("460x300")
+        dlg.geometry("460x360")
         dlg.resizable(False,False)
         dlg.grab_set(); dlg.transient(self)
 
