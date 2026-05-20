@@ -31,13 +31,13 @@ jobs:
       - name: Read version from source
         id: version
         run: |
-          $ver = (Select-String -Path "thickness_viewer_v1_4_3.pyw" -Pattern 'APP_VERSION\s*=\s*"(.+)"').Matches.Groups[1].Value
+          $ver = (Select-String -Path "thickness_viewer_v1_4_4.pyw" -Pattern 'APP_VERSION\s*=\s*"(.+)"').Matches.Groups[1].Value
           echo "ver=$ver" >> $env:GITHUB_OUTPUT
           echo "Version: $ver"
 
       - name: Build EXE with PyInstaller
         run: |
-          pyinstaller --onefile --windowed --icon=icon.ico --name "ThicknessProfiler_v${{ steps.version.outputs.ver }}" thickness_viewer_v1_4_3.pyw
+          pyinstaller --onefile --windowed --icon=icon.ico --name "ThicknessProfiler_v${{ steps.version.outputs.ver }}" thickness_viewer_v1_4_4.pyw
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

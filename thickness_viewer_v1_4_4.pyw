@@ -19,7 +19,7 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.3"
+APP_VERSION = "1.4.4"
 APP_BUILD   = "2026-05-20"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
@@ -81,46 +81,26 @@ def get_app_dir():
 
 SETTINGS_FILE = "thickness_viewer.ini"
 
-_PROGRAMDATA_DIRS = [
-    r"C:\ProgramData\ThicknessViewer",
-    r"D:\ProgramData\ThicknessViewer",
-]
-
-def _find_settings_file():
-    """Cerca il file di configurazione: cartella exe → ProgramData C → ProgramData D.
-    Accetta sia .ini che .par (stesso formato). Restituisce (path_trovato_o_default, trovato)."""
-    for folder in [get_app_dir()] + _PROGRAMDATA_DIRS:
-        for ext in ('.ini', '.par'):
-            p = os.path.join(folder, 'thickness_viewer' + ext)
-            if os.path.isfile(p):
-                return p, True
-    return os.path.join(get_app_dir(), SETTINGS_FILE), False
+PROGRAMDATA_INI = r"C:\ProgramData\ThicknessViewer\thickness_viewer.ini"
 
 def load_settings():
-    src, found = _find_settings_file()
     cfg = configparser.ConfigParser()
     cfg['PLC'] = {'ip':'192.168.0.1','rack':'0','slot':'1','db':'16070'}
     cfg['SQL'] = {'path':'thickness_archive.sqlite'}
-    if found:
-        try: cfg.read(src, encoding='utf-8')
+    if not os.path.isfile(PROGRAMDATA_INI):
+        try:
+            os.makedirs(os.path.dirname(PROGRAMDATA_INI), exist_ok=True)
+            with open(PROGRAMDATA_INI, 'w', encoding='utf-8') as f: cfg.write(f)
         except Exception: pass
-    # Normalizza sempre il path di salvataggio in .ini
-    save_path = os.path.splitext(src)[0] + '.ini'
-    return cfg, save_path
+    else:
+        try: cfg.read(PROGRAMDATA_INI, encoding='utf-8')
+        except Exception: pass
+    return cfg, PROGRAMDATA_INI
 
-def load_settings_from_file(path):
-    """Carica parametri da un .par o .ini specifico (scelto dall'utente)."""
-    cfg = configparser.ConfigParser()
-    cfg['PLC'] = {'ip':'192.168.0.1','rack':'0','slot':'1','db':'16070'}
-    cfg['SQL'] = {'path':'thickness_archive.sqlite'}
-    try: cfg.read(path, encoding='utf-8')
-    except Exception: pass
-    return cfg
-
-def save_settings(cfg, path):
+def save_settings(cfg):
     try:
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f: cfg.write(f)
+        os.makedirs(os.path.dirname(PROGRAMDATA_INI), exist_ok=True)
+        with open(PROGRAMDATA_INI, 'w', encoding='utf-8') as f: cfg.write(f)
         return True
     except Exception: return False
 
@@ -531,7 +511,6 @@ class ThicknessApp(tk.Tk):
             pass
 
         self._cfg, self._cfg_path = load_settings()
-        self._cfg_path_var = tk.StringVar(value=self._cfg_path)
         self.db_data = None
         self._ae_running = False
         self._ae_timer   = None
@@ -671,15 +650,7 @@ class ThicknessApp(tk.Tk):
 
     # ── Settings ─────────────────────────────────────────────
     def _save_ini(self):
-        try:
-            ip   = getattr(self,'_pv_ip',   tk.StringVar(value=self._cfg['PLC'].get('ip','192.168.0.1'))).get().strip()
-            rack = getattr(self,'_pv_rack', tk.StringVar(value='0')).get()
-            slot = getattr(self,'_pv_slot', tk.StringVar(value='1')).get()
-            db   = getattr(self,'_pv_db',   tk.StringVar(value='16010')).get()
-            sql  = getattr(self,'_pv_sql',  tk.StringVar(value='thickness_archive.sqlite')).get()
-            self._cfg['PLC'] = {'ip':ip,'rack':rack,'slot':slot,'db':db}
-            self._cfg['SQL'] = {'path':sql}
-            save_settings(self._cfg, self._cfg_path)
+        try: save_settings(self._cfg)
         except Exception: pass
 
     def _startup(self):
@@ -688,8 +659,6 @@ class ThicknessApp(tk.Tk):
         if miss:
             messagebox.showwarning("Librerie mancanti",
                 f"pip install {' '.join(miss)}")
-        if not os.path.isfile(self._cfg_path):
-            self._save_ini()
 
     def _on_close(self):
         if self._ae_running: self._ae_stop()
@@ -757,6 +726,8 @@ class ThicknessApp(tk.Tk):
         self._btn_pause.pack(side="left",padx=4)
         ttk.Button(top,text="💾 PNG grafico",
                    command=self._save_plot_current).pack(side="right",padx=2)
+        ttk.Button(top,text="⚙ Impostazioni",
+                   command=self._open_settings).pack(side="right",padx=2)
 
         main=ttk.PanedWindow(self,orient="horizontal")
         main.pack(fill="both",expand=True,padx=10,pady=6)
@@ -1800,180 +1771,86 @@ class ThicknessApp(tk.Tk):
     #  TAB 6 — IMPOSTAZIONI
     # ══════════════════════════════════════════════════════════
     def _tab_settings(self, P):
-        wrap=ttk.Frame(P); wrap.pack(fill="both",expand=True,padx=12,pady=12)
-        ttk.Label(wrap,text="Impostazioni applicazione",
-                  style="Title.TLabel").pack(anchor="w",pady=(0,8))
+        wrap=ttk.Frame(P); wrap.pack(fill="both",expand=True)
+        ttk.Frame(wrap).pack(expand=True)
+        tk.Label(wrap,text="⚙",font=("Consolas",48),bg=DARK_BG,fg=MUTED_CLR).pack()
+        ttk.Button(wrap,text="  Apri impostazioni  ",style="Accent.TButton",
+                   command=self._open_settings).pack(pady=10)
+        tk.Label(wrap,text=PROGRAMDATA_INI,bg=DARK_BG,fg=MUTED_CLR,
+                 font=("Consolas",8)).pack()
+        ttk.Frame(wrap).pack(expand=True)
 
-        lfi=ttk.LabelFrame(wrap,text="  File di setup  ",padding=8)
-        lfi.pack(fill="x",pady=4)
-        tk.Label(lfi,text="INI:",bg=DARK_BG,fg=MUTED_CLR,font=("Consolas",9),
-                 anchor="w",width=10).grid(row=0,column=0,sticky="w",padx=2,pady=2)
-        tk.Label(lfi,textvariable=self._cfg_path_var,bg=DARK_BG,fg=ACCENT,
-                 font=("Consolas",9),wraplength=580,justify="left",anchor="w"
-                 ).grid(row=0,column=1,sticky="w",padx=4,pady=2)
-        tk.Label(lfi,text="App dir:",bg=DARK_BG,fg=MUTED_CLR,font=("Consolas",9),
-                 anchor="w",width=10).grid(row=1,column=0,sticky="w",padx=2,pady=2)
-        tk.Label(lfi,text=get_app_dir(),bg=DARK_BG,fg=ACCENT,font=("Consolas",9),
-                 wraplength=580,justify="left",anchor="w"
-                 ).grid(row=1,column=1,sticky="w",padx=4,pady=2)
+    def _open_settings(self):
+        dlg=tk.Toplevel(self)
+        dlg.title("Impostazioni — Thickness Profiler")
+        dlg.configure(bg=DARK_BG)
+        dlg.geometry("460x300")
+        dlg.resizable(False,False)
+        dlg.grab_set(); dlg.transient(self)
 
-        plc_lf=ttk.LabelFrame(wrap,text="  PLC  ",padding=8); plc_lf.pack(fill="x",pady=6)
-        if not hasattr(self,'_pv_ip'):
-            self._pv_ip  =tk.StringVar(value=self._cfg['PLC'].get('ip','192.168.0.1'))
-            self._pv_rack=tk.StringVar(value=self._cfg['PLC'].get('rack','0'))
-            self._pv_slot=tk.StringVar(value=self._cfg['PLC'].get('slot','1'))
-            self._pv_db  =tk.StringVar(value=self._cfg['PLC'].get('db','16010'))
-        for r,(lbl,var,w2) in enumerate([
-                ("IP:",self._pv_ip,20),("Rack:",self._pv_rack,6),
-                ("Slot:",self._pv_slot,6),("DB #:",self._pv_db,10)]):
-            tk.Label(plc_lf,text=lbl,bg=DARK_BG,fg=MUTED_CLR,font=("Consolas",10),
-                     anchor="w",width=10).grid(row=r,column=0,sticky="w",padx=2,pady=2)
-            ttk.Entry(plc_lf,textvariable=var,width=w2,font=("Consolas",10)
-                      ).grid(row=r,column=1,sticky="w",padx=4,pady=2)
+        sv_ip  =tk.StringVar(value=self._cfg['PLC'].get('ip',  '192.168.0.1'))
+        sv_rack=tk.StringVar(value=self._cfg['PLC'].get('rack','0'))
+        sv_slot=tk.StringVar(value=self._cfg['PLC'].get('slot','1'))
+        sv_db  =tk.StringVar(value=self._cfg['PLC'].get('db',  '16070'))
+        sv_sql =tk.StringVar(value=self._cfg['SQL'].get('path','thickness_archive.sqlite'))
 
-        sql_lf=ttk.LabelFrame(wrap,text="  Archivio SQLite  ",padding=8)
-        sql_lf.pack(fill="x",pady=6)
-        self._pv_sql=tk.StringVar(value=self._cfg['SQL'].get('path','thickness_archive.sqlite'))
-        tk.Label(sql_lf,text="File SQLite:",bg=DARK_BG,fg=MUTED_CLR,
-                 font=("Consolas",10),anchor="w",width=10
-                 ).grid(row=0,column=0,sticky="w",padx=2,pady=2)
-        ttk.Entry(sql_lf,textvariable=self._pv_sql,width=60,font=("Consolas",10)
-                  ).grid(row=0,column=1,sticky="ew",padx=4,pady=2)
-        ttk.Button(sql_lf,text="📁",command=self._browse_sql
-                   ).grid(row=0,column=2,padx=2)
-        tk.Label(sql_lf,text="(relativo = cartella app; assoluto = path completo)",
-                 bg=DARK_BG,fg=MUTED_CLR,font=("Consolas",8)
-                 ).grid(row=1,column=0,columnspan=3,sticky="w",padx=2)
-        self._pv_sql_res=tk.StringVar(value=f"→ {resolve_sql(self._pv_sql.get())}")
-        tk.Label(sql_lf,textvariable=self._pv_sql_res,bg=DARK_BG,fg=ACCENT,
-                 font=("Consolas",9),wraplength=700,anchor="w",justify="left"
-                 ).grid(row=2,column=0,columnspan=3,sticky="w",padx=2,pady=2)
-        self._pv_sql.trace_add('write',lambda *a:self._upd_sql_res())
+        def _row(parent, label, sv, width=22, tip=None):
+            f=ttk.Frame(parent); f.pack(fill="x",pady=3)
+            ttk.Label(f,text=label,style="Muted.TLabel",width=13).pack(side="left")
+            ttk.Entry(f,textvariable=sv,width=width).pack(side="left",padx=4)
+            if tip: ttk.Label(f,text=tip,style="Muted.TLabel",
+                              font=("Consolas",8)).pack(side="left")
 
-        btn_lf=ttk.Frame(wrap); btn_lf.pack(fill="x",pady=10)
-        ttk.Button(btn_lf,text="💾 Salva",style="Accent.TButton",
-                   command=self._save_confirm).pack(side="left",padx=2)
-        ttk.Button(btn_lf,text="📂 Carica .par/.ini",
-                   command=self._load_params_file).pack(side="left",padx=2)
-        ttk.Button(btn_lf,text="📁 Apri cartella",
-                   command=lambda:self._open_path(get_app_dir())).pack(side="left",padx=2)
+        plc_lf=ttk.LabelFrame(dlg,text="  Connessione PLC  ",padding=10)
+        plc_lf.pack(fill="x",padx=14,pady=8)
+        _row(plc_lf,"IP PLC:",sv_ip,tip="es. 192.168.0.1")
+        r_rs=ttk.Frame(plc_lf); r_rs.pack(fill="x",pady=3)
+        ttk.Label(r_rs,text="Rack:",style="Muted.TLabel",width=13).pack(side="left")
+        ttk.Entry(r_rs,textvariable=sv_rack,width=5).pack(side="left",padx=4)
+        ttk.Label(r_rs,text="Slot:",style="Muted.TLabel").pack(side="left",padx=(10,0))
+        ttk.Entry(r_rs,textvariable=sv_slot,width=5).pack(side="left",padx=4)
+        ttk.Label(r_rs,text="DB #:",style="Muted.TLabel").pack(side="left",padx=(10,0))
+        ttk.Entry(r_rs,textvariable=sv_db,width=8).pack(side="left",padx=4)
 
-        notes_lf=ttk.LabelFrame(wrap,text="  Note tecniche  ",padding=8)
-        notes_lf.pack(fill="both",expand=True,pady=4)
-        notes=tk.Text(notes_lf,bg=PANEL_BG,fg=TEXT_CLR,font=("Consolas",9),
-                      wrap="word",height=14,insertbackground=TEXT_CLR)
-        notes.pack(fill="both",expand=True)
-        notes.insert("end",f"""
-{FB_TARGET}  v1.2  |  DB: {self._db_size} byte ({self._db_size/1024:.1f} KB)
-Array: {ARRAY_SIZE} celle [0..200]  |  Risoluzione: 0.80 mm/cella @ RangeControllo=80mm
-Offset map verificata empiricamente su CPU 1517F-3 PN/DP (VAR_IN_OUT=2b, DB v1.1=4992b)
+        sql_lf=ttk.LabelFrame(dlg,text="  Database SQLite  ",padding=10)
+        sql_lf.pack(fill="x",padx=14,pady=4)
+        r_sql=ttk.Frame(sql_lf); r_sql.pack(fill="x")
+        ttk.Label(r_sql,text="File SQLite:",style="Muted.TLabel",width=13).pack(side="left")
+        ttk.Entry(r_sql,textvariable=sv_sql,width=28).pack(side="left",padx=4)
+        def _browse():
+            init=resolve_sql(sv_sql.get())
+            fp=filedialog.asksaveasfilename(parent=dlg,title="SQLite",
+                defaultextension=".sqlite",initialfile=os.path.basename(init),
+                initialdir=os.path.dirname(init) or get_app_dir(),
+                filetypes=[("SQLite","*.sqlite *.db3"),("Tutti","*.*")])
+            if fp:
+                try:
+                    rel=os.path.relpath(fp,get_app_dir())
+                    sv_sql.set(rel if not rel.startswith('..') else fp)
+                except: sv_sql.set(fp)
+        ttk.Button(r_sql,text="…",width=3,command=_browse).pack(side="left")
 
-NOVITÀ v1.2 — SEPARAZIONE TARATURA / PRODUZIONE:
-  SpessoreDiscoRiferimento [UDT]:
-    Usato SOLO per costruire la baseline durante la taratura.
-    Non cambia finché non si ritara il banco.
-  I_SpessoreAtteso [VAR_INPUT, offset 68]:
-    Spessore nominale del disco di produzione corrente.
-    Cambia ad ogni cambio formato (1.1mm, 2.1mm, 3.1mm...).
-    NON richiede ritaratura.
-  SpessoreMassimo [UDT]:
-    Tolleranza massima su aProfiloDelta [mm].
-    NOK se aProfiloSpessore > I_SpessoreAtteso + SpessoreMassimo.
+        info_lf=ttk.LabelFrame(dlg,text="  File configurazione  ",padding=6)
+        info_lf.pack(fill="x",padx=14,pady=6)
+        tk.Label(info_lf,text=PROGRAMDATA_INI,bg=DARK_BG,fg=ACCENT,
+                 font=("Consolas",8),anchor="w").pack(fill="x")
 
-OFFSET MAP v1.2 (offset chiave):
-  I_SpessoreAtteso        @  68  Real
-  O_SpessoreMedio         @  74  Real
-  Pinza.OvrAutoOld        @ 102  LReal
-  aBaseline[0]            @ 122  Real (201 x 4 = 804 byte)
-  aSomRaw[0]              @ 948
-  aProfiloSpessore[0]     @ 3360
-  aProfiloDelta[0]        @ 4164
-  AppSpessoreMedio        @ 4970  Real
-  AppNcelleFuoriSoglia    @ 4988  Int
-  OldDirLavoro            @ 4992  Int
+        def _save():
+            self._cfg['PLC']={'ip':sv_ip.get().strip(),'rack':sv_rack.get(),
+                              'slot':sv_slot.get(),'db':sv_db.get()}
+            self._cfg['SQL']={'path':sv_sql.get()}
+            if save_settings(self._cfg):
+                self._upd_ae_sql()
+                dlg.destroy()
+            else:
+                messagebox.showerror("Errore",
+                    f"Impossibile scrivere:\n{PROGRAMDATA_INI}",parent=dlg)
 
-FISICA: laser SOTTO il disco, quota decresce con spessore crescente.
-  aBaseline[i] = laser_cal + SpessoreDiscoRiferimento  = quota supporto
-  aProfiloSpessore[i] = aBaseline[i] - laser_prod      = spessore reale
-  aProfiloDelta[i]    = aProfiloSpessore[i] - I_SpessoreAtteso = eccesso
-""")
-        notes.config(state="disabled")
-
-    def _upd_sql_res(self):
-        try:
-            self._pv_sql_res.set(f"→ {resolve_sql(self._pv_sql.get())}")
-            self._upd_ae_sql()
-        except: pass
-
-    def _save_confirm(self):
-        self._save_ini()
-        messagebox.showinfo("Salvato", f"INI: {self._cfg_path}", parent=self)
-
-    def _load_params_file(self):
-        """Carica parametri da un file .par o .ini scelto dall'utente,
-        poi chiede dove salvare l'INI (default: C:\\ProgramData\\ThicknessViewer)."""
-        dirs = [get_app_dir()] + _PROGRAMDATA_DIRS
-        init_dir = next((d for d in dirs if os.path.isdir(d)), get_app_dir())
-        fp = filedialog.askopenfilename(
-            parent=self,
-            title="Carica file parametri",
-            initialdir=init_dir,
-            filetypes=[("Parametri", "*.ini *.par"), ("Tutti i file", "*.*")],
-        )
-        if not fp:
-            return
-        cfg = load_settings_from_file(fp)
-
-        # Chiede dove salvare — default C:\ProgramData\ThicknessViewer
-        save_dir = r"C:\ProgramData\ThicknessViewer"
-        save_path = filedialog.asksaveasfilename(
-            parent=self,
-            title="Salva file parametri come…",
-            initialdir=save_dir,
-            initialfile="thickness_viewer.ini",
-            defaultextension=".ini",
-            filetypes=[("File INI", "*.ini"), ("Tutti i file", "*.*")],
-        )
-        if not save_path:
-            return  # utente ha annullato il salvataggio
-
-        # Aggiorna StringVars nel tab impostazioni
-        if hasattr(self, '_pv_ip'):
-            self._pv_ip.set(cfg['PLC'].get('ip', '192.168.0.1'))
-            self._pv_rack.set(cfg['PLC'].get('rack', '0'))
-            self._pv_slot.set(cfg['PLC'].get('slot', '1'))
-            self._pv_db.set(cfg['PLC'].get('db', '16010'))
-        if hasattr(self, '_pv_sql'):
-            self._pv_sql.set(cfg['SQL'].get('path', 'thickness_archive.sqlite'))
-
-        self._cfg = cfg
-        self._cfg_path = save_path
-        self._cfg_path_var.set(save_path)
-        # Salva subito nella destinazione scelta
-        if save_settings(cfg, save_path):
-            messagebox.showinfo(
-                "Parametri salvati",
-                f"Caricato da:\n{fp}\n\nSalvato in:\n{save_path}",
-                parent=self,
-            )
-        else:
-            messagebox.showerror(
-                "Errore salvataggio",
-                f"Impossibile scrivere:\n{save_path}",
-                parent=self,
-            )
-
-    def _browse_sql(self):
-        init=resolve_sql(self._pv_sql.get())
-        fp=filedialog.asksaveasfilename(title="SQLite",defaultextension=".sqlite",
-            initialfile=os.path.basename(init),
-            initialdir=os.path.dirname(init) or get_app_dir(),
-            filetypes=[("SQLite","*.sqlite *.db3"),("Tutti","*.*")])
-        if fp:
-            try:
-                rel=os.path.relpath(fp,get_app_dir())
-                self._pv_sql.set(rel if not rel.startswith('..') else fp)
-            except: self._pv_sql.set(fp)
+        btn_f=ttk.Frame(dlg); btn_f.pack(fill="x",padx=14,pady=8)
+        ttk.Button(btn_f,text="💾 Salva",style="Accent.TButton",
+                   command=_save).pack(side="left",padx=4)
+        ttk.Button(btn_f,text="Annulla",
+                   command=dlg.destroy).pack(side="left",padx=4)
 
     # ── HELPERS ──────────────────────────────────────────────
     def app_log(self, msg, *_): self._lbl_st.config(text=msg)

@@ -13,11 +13,11 @@ def draw_arrow(draw, x0, y0, x1, y1, color, lw, head):
         draw.line([(x1, y1), (ax, ay)], fill=color, width=lw)
 
 def make_icon(size):
-    img = Image.new("RGBA", (size, size), (255, 255, 255, 0))
+    img = Image.new("RGBA", (size, size), (230, 100, 20, 255))  # sfondo arancione
     d = ImageDraw.Draw(img)
     s = size
     c = s // 2          # centro
-    col = (40, 40, 40, 255)
+    col = (255, 255, 255, 255)  # bianco su arancione
     lw  = max(2, s // 32)
     head = max(6, s // 16)
 
@@ -32,7 +32,7 @@ def make_icon(size):
     by1 = s - s // 8
 
     # tratteggio tra le barre
-    hatch_col = (90, 90, 90, 180)
+    hatch_col = (255, 200, 150, 200)  # arancione chiaro
     step = max(4, s // 30)
     for i, yy in enumerate(range(by0, by1, step)):
         if i % 2 == 0:
