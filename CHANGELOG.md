@@ -6,6 +6,29 @@ La versione dell'app è definita da `APP_VERSION` in `thickness_viewer_v1_4_6.py
 Pubblicando un tag `vX.Y.Z` la CI builda l'exe e crea la release su GitHub
 (da cui l'auto-update dell'app scarica la nuova versione).
 
+## [1.4.10] - 2026-05-25
+
+### Corretto (auto-update)
+- **Il nuovo exe non si avviava da solo dopo l'aggiornamento.** Causa: alla chiusura
+  l'app eseguiva `taskkill /F /T` che, con il flag `/T`, uccideva anche il processo
+  figlio appena lanciato (il nuovo exe). Ora durante l'update si usa `taskkill` senza
+  `/T` (flag `_RESTARTING`), così il nuovo processo sopravvive e parte regolarmente.
+- **Dopo l'update l'exe cambiava nome e posizione sul desktop.** Causa: il nuovo file
+  veniva salvato col nome versionato dell'asset (`ThicknessProfiler_vX.Y.Z.exe`), diverso
+  dal precedente. Ora l'aggiornamento avviene **in-place**: il nuovo exe viene scaricato
+  in un file di staging `<exe>.upd`, si **copia sopra l'exe esistente mantenendo nome e
+  posizione**, poi si riavvia. L'icona sul desktop non si sposta più.
+
+### Modificato
+- Nuova modalità interna `--apply-update <target> <pid>` per il riavvio in-place;
+  mantenuta retro-compatibilità con il vecchio schema `--replace=`.
+- Pulizia all'avvio estesa anche ai file temporanei `*.upd`.
+
+> Nota: il fix ha effetto sugli aggiornamenti **a partire da questa versione**. L'update
+> *verso* la 1.4.10 fatto da una versione precedente (≤1.4.9) usa ancora il vecchio
+> meccanismo difettoso: potrebbe servire avviare manualmente l'exe una volta. Dalla
+> 1.4.10 in poi l'aggiornamento è automatico e senza spostamenti.
+
 ## [1.4.9] - 2026-05-25
 
 ### Aggiunto

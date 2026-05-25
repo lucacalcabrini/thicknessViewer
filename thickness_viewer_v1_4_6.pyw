@@ -19,7 +19,7 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.9"
+APP_VERSION = "1.4.10"
 APP_BUILD   = "2026-05-25"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
@@ -36,22 +36,76 @@ if sys.platform == "win32":
 
 import os, signal, atexit
 _MAIN_PID = os.getpid()
+_RESTARTING = False   # True durante un auto-update: NON uccidere l'albero dei figli
+                      # (il nuovo exe è un figlio che deve sopravvivere alla chiusura)
 
 def _kill_tree():
     if os.getpid() != _MAIN_PID: return
     try:
         if sys.platform == "win32":
             import subprocess
-            subprocess.call(["taskkill","/F","/T","/PID",str(_MAIN_PID)],
+            # In update niente /T: altrimenti taskkill ucciderebbe anche il nuovo exe
+            cmd = (["taskkill","/F","/PID",str(_MAIN_PID)] if _RESTARTING
+                   else ["taskkill","/F","/T","/PID",str(_MAIN_PID)])
+            subprocess.call(cmd,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 creationflags=0x08000000)
         else:
-            os.killpg(os.getpgid(_MAIN_PID), signal.SIGKILL)
+            if _RESTARTING:
+                os.kill(_MAIN_PID, signal.SIGKILL)
+            else:
+                os.killpg(os.getpgid(_MAIN_PID), signal.SIGKILL)
     except Exception:
         try: os.kill(_MAIN_PID, signal.SIGKILL)
         except Exception: pass
 
 atexit.register(_kill_tree)
+
+
+def _pid_alive(pid):
+    """True se il processo <pid> è ancora in esecuzione (Windows)."""
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"],
+            capture_output=True, text=True,
+            creationflags=0x08000000).stdout or ""
+        return str(int(pid)) in out
+    except Exception:
+        return False
+
+
+def _apply_update_and_relaunch(target, old_pid):
+    """Eseguito dal NUOVO exe in staging (file .upd):
+    1) attende la chiusura del vecchio processo;
+    2) si copia SOPRA <target> (stesso nome e posizione → l'icona non si sposta);
+    3) riavvia l'exe aggiornato.
+    Esce con os._exit per NON far scattare _kill_tree sul figlio appena lanciato."""
+    import time as _t, shutil, subprocess
+    staging = os.path.abspath(sys.executable)
+    target  = os.path.abspath(target)
+    # 1) attende che il vecchio termini (max ~15s)
+    for _ in range(150):
+        if old_pid <= 0 or not _pid_alive(old_pid):
+            break
+        _t.sleep(0.1)
+    # 2) sovrascrive il vecchio exe col nuovo, ritentando se ancora bloccato (~12s)
+    copied = False
+    for _ in range(60):
+        try:
+            shutil.copy2(staging, target); copied = True; break
+        except Exception:
+            _t.sleep(0.2)
+    # 3) riavvia l'exe (nome/posizione stabili); fallback prudente se la copia fallisce
+    launch = target if (copied or os.path.isfile(target)) else staging
+    try:
+        DET = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        NPG = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        subprocess.Popen([launch], creationflags=DET | NPG)
+    except Exception:
+        try: subprocess.Popen([launch])
+        except Exception: pass
+    os._exit(0)
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -600,20 +654,26 @@ class ThicknessApp(tk.Tk):
             ).start()
 
     def _cleanup_update_leftovers(self):
-        """All'avvio rimuove eventuali ThicknessProfiler_v*.exe vecchi nella stessa cartella."""
+        """All'avvio rimuove i file temporanei di update (.upd) e i vecchi
+        ThicknessProfiler_v*.exe diversi da quello attualmente in esecuzione."""
         import glob
         if not getattr(sys, 'frozen', False):
             return
-        exe_dir  = os.path.dirname(sys.executable)
+        exe_dir  = os.path.dirname(os.path.abspath(sys.executable))
         exe_name = os.path.basename(sys.executable)
-        for old in glob.glob(os.path.join(exe_dir, "ThicknessProfiler_v*.exe")):
+        leftovers = (glob.glob(os.path.join(exe_dir, "ThicknessProfiler_v*.exe"))
+                     + glob.glob(os.path.join(exe_dir, "*.upd")))
+        for old in leftovers:
             if os.path.basename(old) != exe_name:
                 try: os.remove(old)
                 except Exception: pass
 
     def _download_and_restart(self, url, filename):
-        """Scarica il nuovo exe con barra % nel titolo, lo lancia con --replace=,
-        poi si chiude. Il nuovo exe cancella da solo il vecchio dopo 2s."""
+        """Scarica il nuovo exe in un file di staging «<exe>.upd» nella stessa
+        cartella, poi lo lancia in modalità --apply-update: il nuovo exe si copia
+        SOPRA quello in esecuzione (stesso nome e posizione → l'icona non si sposta)
+        e lo riavvia da solo."""
+        global _RESTARTING
         import urllib.request, subprocess
         if not getattr(sys, 'frozen', False):
             self.after(0, lambda: messagebox.showinfo(
@@ -623,9 +683,8 @@ class ThicknessApp(tk.Tk):
                 parent=self))
             return
 
-        exe_path = sys.executable
-        exe_dir  = os.path.dirname(exe_path)
-        new_exe  = os.path.join(exe_dir, filename)
+        exe_path = os.path.abspath(sys.executable)
+        staging  = exe_path + ".upd"      # stesso percorso, suffisso temporaneo
 
         try:
             self.after(0, lambda: self.title("⬇  Connessione…"))
@@ -634,7 +693,7 @@ class ThicknessApp(tk.Tk):
             with urllib.request.urlopen(req, timeout=120) as resp:
                 total = int(resp.headers.get("Content-Length") or 0)
                 done  = 0
-                with open(new_exe, "wb") as f:
+                with open(staging, "wb") as f:
                     while True:
                         chunk = resp.read(65536)
                         if not chunk:
@@ -646,8 +705,8 @@ class ThicknessApp(tk.Tk):
                             self.after(0, lambda p=pct:
                                 self.title(f"⬇  Download {p}%…"))
         except Exception as e:
-            if os.path.isfile(new_exe):
-                try: os.remove(new_exe)
+            if os.path.isfile(staging):
+                try: os.remove(staging)
                 except Exception: pass
             self.after(0, lambda err=str(e): messagebox.showerror(
                 "Errore aggiornamento",
@@ -659,17 +718,19 @@ class ThicknessApp(tk.Tk):
                 f"◈ Thickness Profiler  {APP_RELEASE}  —  {FB_TARGET}"))
             return
 
-        # Lancia il nuovo exe passando il percorso del vecchio da cancellare
+        # Lancia il nuovo exe (staging) che si copierà sopra exe_path e riavvierà
         try:
+            _RESTARTING = True   # impedisce a _kill_tree (/T) di uccidere il figlio
             subprocess.Popen(
-                [new_exe, f"--replace={exe_path}"],
+                [staging, "--apply-update", exe_path, str(os.getpid())],
                 creationflags=subprocess.DETACHED_PROCESS
                               | subprocess.CREATE_NEW_PROCESS_GROUP,
             )
             self.after(0, self.destroy)
         except Exception as e:
-            if os.path.isfile(new_exe):
-                try: os.remove(new_exe)
+            _RESTARTING = False
+            if os.path.isfile(staging):
+                try: os.remove(staging)
                 except Exception: pass
             self.after(0, lambda err=str(e): messagebox.showerror(
                 "Errore aggiornamento",
@@ -2092,8 +2153,16 @@ if __name__=="__main__":
     import multiprocessing
     multiprocessing.freeze_support()
 
-    # Gestione --replace=<vecchio_exe>: il vecchio è già chiuso,
-    # aspetta 2s in background poi lo cancella.
+    # Modalità staging (v1.4.10+): «<staging>.upd --apply-update <target_exe> <old_pid>»
+    # Il nuovo exe si copia sopra il vecchio (stesso nome/posizione) e lo riavvia.
+    if len(sys.argv) >= 3 and sys.argv[1] == "--apply-update":
+        _tgt = sys.argv[2]
+        try:    _pid = int(sys.argv[3]) if len(sys.argv) >= 4 else 0
+        except Exception: _pid = 0
+        _apply_update_and_relaunch(_tgt, _pid)   # termina con os._exit
+
+    # Retro-compatibilità con il vecchio schema --replace=<vecchio_exe> (≤ v1.4.9):
+    # il vecchio è già chiuso, aspetta 2s in background poi lo cancella.
     _old_to_delete = None
     for _arg in sys.argv[1:]:
         if _arg.startswith("--replace="):
