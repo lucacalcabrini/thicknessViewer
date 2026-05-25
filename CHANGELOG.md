@@ -6,6 +6,24 @@ La versione dell'app è definita da `APP_VERSION` in `thickness_viewer_v1_4_6.py
 Pubblicando un tag `vX.Y.Z` la CI builda l'exe e crea la release su GitHub
 (da cui l'auto-update dell'app scarica la nuova versione).
 
+## [1.4.9] - 2026-05-25
+
+### Aggiunto
+- **Griglia configurabile (tab Profilo)**: nuova riga "Griglia:" sotto la barra checkbox
+  con due Combobox per scegliere il passo delle linee griglia:
+  - **Y [mm]**: 0.10 / **0.25** (default) / 0.50 / 1.00
+  - **X [mm]**: 5 / **10** (default) / 20 / 50
+  Il grafico si ridisegna automaticamente al cambio selezione.
+- **Strumenti grafico visibili**: la barra Pan/Zoom/Home di matplotlib era completamente
+  invisibile (nero su nero). Ora ha sfondo distinto (`#1c2128`), pulsanti rialzati
+  (`#2d333b`, hover accent blu) e un'etichetta "🛠 Strumenti grafico →" che spiega
+  la funzione dei controlli. I pulsanti disponibili sono:
+  - 🏠 Home — ripristina la vista iniziale
+  - ← / → — naviga avanti/indietro nella cronologia zoom
+  - ✋ Pan — trascina il grafico
+  - 🔍 Zoom — seleziona un rettangolo per lo zoom
+  - 💾 Salva — salva il grafico come immagine
+
 ## [1.4.8] - 2026-05-25
 
 ### Aggiunto

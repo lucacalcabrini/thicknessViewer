@@ -19,7 +19,7 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.8"
+APP_VERSION = "1.4.9"
 APP_BUILD   = "2026-05-25"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
@@ -60,6 +60,7 @@ import re, datetime, time, struct, sqlite3, configparser
 import matplotlib; matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
+from matplotlib.ticker import MultipleLocator
 import numpy as np
 
 SNAP7_AVAILABLE = False
@@ -915,16 +916,50 @@ class ThicknessApp(tk.Tk):
         ttk.Button(bar,text="💾 PNG",
                    command=lambda:self._save_plot(self.fig_p)).pack(side="right",padx=2)
 
+        # ── Riga 2: controllo passo griglia ───────────────────
+        bar2=ttk.Frame(P); bar2.pack(fill="x",padx=4,pady=(0,2))
+        tk.Label(bar2,text="Griglia:",bg=DARK_BG,fg=MUTED_CLR,
+                 font=("Consolas",8,"bold")).pack(side="left",padx=(4,6))
+        tk.Label(bar2,text="Y [mm]:",bg=DARK_BG,fg=MUTED_CLR,
+                 font=("Consolas",8)).pack(side="left")
+        self._pv_grid_y=tk.StringVar(value="0.25")
+        cb_y=ttk.Combobox(bar2,textvariable=self._pv_grid_y,
+                          values=["0.10","0.25","0.50","1.00"],
+                          width=5,state="readonly",font=("Consolas",8))
+        cb_y.pack(side="left",padx=(2,12))
+        tk.Label(bar2,text="X [mm]:",bg=DARK_BG,fg=MUTED_CLR,
+                 font=("Consolas",8)).pack(side="left")
+        self._pv_grid_x=tk.StringVar(value="10")
+        cb_x=ttk.Combobox(bar2,textvariable=self._pv_grid_x,
+                          values=["5","10","20","50"],
+                          width=5,state="readonly",font=("Consolas",8))
+        cb_x.pack(side="left",padx=2)
+        cb_y.bind("<<ComboboxSelected>>",lambda _:self._draw_profilo())
+        cb_x.bind("<<ComboboxSelected>>",lambda _:self._draw_profilo())
+
         self.fig_p=Figure(figsize=(10,6),dpi=95,facecolor=DARK_BG)
         self.ax_p=self.fig_p.add_subplot(111,facecolor=PANEL_BG)
         self._sax(self.ax_p)
         cv=FigureCanvasTkAgg(self.fig_p,P)
         cv.get_tk_widget().pack(fill="both",expand=True,padx=4,pady=4)
         self._cv_p=cv
-        tf=ttk.Frame(P); tf.pack(fill="x")
-        tb=NavigationToolbar2Tk(cv,tf)
-        tb.config(background=DARK_BG)
-        for b in tb.winfo_children(): b.config(background=DARK_BG)
+
+        # ── Barra strumenti matplotlib (Pan / Zoom / Home …) ──
+        _TB="#1c2128"; _BTN="#2d333b"
+        bot=tk.Frame(P,bg=_TB); bot.pack(fill="x",padx=4,pady=(0,3))
+        tk.Label(bot,text="🛠 Strumenti grafico →",bg=_TB,fg=MUTED_CLR,
+                 font=("Consolas",8,"bold")).pack(side="left",padx=(4,8))
+        tb=NavigationToolbar2Tk(cv,bot)
+        tb.config(background=_TB)
+        for _ch in tb.winfo_children():
+            try:
+                if _ch.winfo_class()=="Button":
+                    _ch.config(bg=_BTN,activebackground=ACCENT,
+                               relief="raised",bd=1,padx=3,pady=2)
+                else:
+                    _ch.config(bg=_TB,fg=MUTED_CLR)
+            except Exception:
+                pass
         tb.update()
 
     def _sax(self, ax):
@@ -1102,6 +1137,14 @@ class ThicknessApp(tk.Tk):
         leg=ax.legend(loc='upper right',fontsize=8,framealpha=0.9,
                       facecolor=PANEL_BG,edgecolor=BORDER_CLR,labelcolor=TEXT_CLR)
         if leg: leg.get_frame().set_facecolor(PANEL_BG)
+
+        # ── Griglia a passo configurabile ─────────────────────
+        try:
+            ax.yaxis.set_major_locator(MultipleLocator(float(self._pv_grid_y.get())))
+            ax.xaxis.set_major_locator(MultipleLocator(float(self._pv_grid_x.get())))
+        except Exception:
+            pass
+
         self.fig_p.tight_layout(); self._cv_p.draw_idle()
 
     @staticmethod
