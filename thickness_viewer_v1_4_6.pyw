@@ -19,8 +19,8 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.6"
-APP_BUILD   = "2026-05-20"
+APP_VERSION = "1.4.7"
+APP_BUILD   = "2026-05-25"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
 FB_SCL_NAME = '"Fb936_ControlloSpessore_v12"'
@@ -485,6 +485,7 @@ PROFILE_CLR="#79c0ff";   BASELINE_CLR="#e3b341"; DELTA_CLR="#ff9070"
 NOK_LINE_CLR="#ff6e85";  FUORI_CLR="#ff4d6d";    PLC_CLR="#f0883e"
 THRESHOLD_CLR="#e3b341"
 AUTOEXP_CLR="#56d364";   TAR_CLR="#d2a8ff";       LASER_CLR="#4fc3f7"
+MEAN_CLR="#a371f7"   # linea/banda spessore medio
 WARN_BG="#7d2a00"   # (colore riservato per futuri banner)
 
 
@@ -895,10 +896,16 @@ class ThicknessApp(tk.Tk):
         self._ck_base=tk.BooleanVar(value=False)  # baseline nascosta di default
         self._ck_thresh=tk.BooleanVar(value=True)
         self._ck_nok=tk.BooleanVar(value=True)
+        self._ck_mean=tk.BooleanVar(value=True)   # linea spessore medio
+        self._ck_std=tk.BooleanVar(value=False)   # banda +/- dev.std
+        self._ck_stats=tk.BooleanVar(value=True)  # box statistiche
         for var,txt in [(self._ck_prof,"Profilo spessore"),
                         (self._ck_base,"Baseline (quota supporto)"),
                         (self._ck_thresh,"Soglie"),
-                        (self._ck_nok,"Celle NOK")]:
+                        (self._ck_nok,"Celle NOK"),
+                        (self._ck_mean,"Spessore medio"),
+                        (self._ck_std,"Banda ±σ"),
+                        (self._ck_stats,"Statistiche")]:
             tk.Checkbutton(bar,text=txt,variable=var,bg=DARK_BG,fg=TEXT_CLR,
                 selectcolor="#1f6feb",activebackground=DARK_BG,font=("Consolas",9),
                 command=self._draw_profilo).pack(side="left",padx=4)
@@ -1016,6 +1023,43 @@ class ThicknessApp(tk.Tk):
                           colors=FUORI_CLR,lw=0.8,alpha=0.45,zorder=7)
                 plotted=True
 
+        # ── Spessore medio / dispersione / statistiche ────────
+        prof_valid = (prof_arr[mask_valid & np.isfinite(prof_arr)]
+                      if prof_arr is not None else np.array([]))
+        if prof_valid.size:
+            mean_v = float(np.mean(prof_valid))
+            std_v  = float(np.std(prof_valid))
+            min_v  = float(np.min(prof_valid))
+            max_v  = float(np.max(prof_valid))
+            if dlt_arr is not None:
+                dvalid = dlt_arr[mask_valid & np.isfinite(dlt_arr)]
+                n_nok  = int(np.count_nonzero(dvalid > sg))
+                n_warn = int(np.count_nonzero((dvalid > sg*0.70) & (dvalid <= sg)))
+            else:
+                n_nok = n_warn = 0
+            if self._ck_std.get():
+                ax.axhspan(mean_v-std_v, mean_v+std_v, alpha=0.10,
+                           color=MEAN_CLR, zorder=2,
+                           label=f'Banda ±σ = {std_v:.3f} mm')
+            if self._ck_mean.get():
+                ax.axhline(mean_v, color=MEAN_CLR, lw=1.7, ls='-.', alpha=0.95,
+                           label=f'Spessore medio: {mean_v:.3f} mm', zorder=6)
+            if self._ck_stats.get():
+                stats_txt=("STATISTICHE\n"
+                           f"media   {mean_v:7.3f} mm\n"
+                           f"min     {min_v:7.3f} mm\n"
+                           f"max     {max_v:7.3f} mm\n"
+                           f"dev.std {std_v:7.3f} mm\n"
+                           f"celle   {prof_valid.size:>4d}/{n}\n"
+                           f"vicino  {n_warn:>4d}\n"
+                           f"NOK     {n_nok:>4d}")
+                ax.text(0.013,0.97,stats_txt,transform=ax.transAxes,
+                        ha='left',va='top',fontsize=8,family='monospace',
+                        color=TEXT_CLR,zorder=12,
+                        bbox=dict(boxstyle='round,pad=0.45',facecolor=PANEL_BG,
+                                  edgecolor=MEAN_CLR,alpha=0.93))
+            plotted=True
+
         if not plotted or (prof_arr is None and dlt_arr is None):
             ax.text(0.5,0.5,"Dati profilo non presenti nel DB letto",
                     ha='center',va='center',color=WARN_CLR,fontsize=12,
@@ -1063,6 +1107,13 @@ class ThicknessApp(tk.Tk):
         ttk.Label(bar,
             text="Δ = spessore misurato − spessore atteso   •   verde=OK  rosso=NOK",
             style="Muted.TLabel").pack(side="left")
+        self._ck_dmean=tk.BooleanVar(value=True)    # linea delta medio
+        self._ck_dstats=tk.BooleanVar(value=True)   # box statistiche delta
+        for var,txt in [(self._ck_dmean,"Delta medio"),
+                        (self._ck_dstats,"Statistiche")]:
+            tk.Checkbutton(bar,text=txt,variable=var,bg=DARK_BG,fg=TEXT_CLR,
+                selectcolor="#1f6feb",activebackground=DARK_BG,font=("Consolas",9),
+                command=self._draw_delta).pack(side="left",padx=8)
         ttk.Button(bar,text="🔄",command=self._draw_delta).pack(side="right",padx=2)
         ttk.Button(bar,text="💾 PNG",
                    command=lambda:self._save_plot(self.fig_d)).pack(side="right",padx=2)
@@ -1114,6 +1165,26 @@ class ThicknessApp(tk.Tk):
                     ax.scatter(x[mask_nok],dlt_arr[mask_nok],
                                color=FUORI_CLR,s=44,marker='x',lw=2.0,
                                label=f'Celle NOK ({int(mask_nok.sum())})',zorder=9)
+
+                dmean_v=float(np.mean(dm)); dstd_v=float(np.std(dm))
+                dmin_v=float(np.min(dm));   dmax_v=float(np.max(dm))
+                if self._ck_dmean.get():
+                    ax.axhline(dmean_v,color=MEAN_CLR,lw=1.7,ls='-.',alpha=0.95,
+                               label=f'Delta medio: {dmean_v:+.3f} mm',zorder=6)
+                if self._ck_dstats.get():
+                    stats_txt=("STATISTICHE Δ\n"
+                               f"media   {dmean_v:+7.3f} mm\n"
+                               f"min     {dmin_v:+7.3f} mm\n"
+                               f"max     {dmax_v:+7.3f} mm\n"
+                               f"dev.std {dstd_v:7.3f} mm\n"
+                               f"celle   {dm.size:>4d}/{n}\n"
+                               f"vicino  {int(mask_warn.sum()):>4d}\n"
+                               f"NOK     {int(mask_nok.sum()):>4d}")
+                    ax.text(0.013,0.97,stats_txt,transform=ax.transAxes,
+                            ha='left',va='top',fontsize=8,family='monospace',
+                            color=TEXT_CLR,zorder=12,
+                            bbox=dict(boxstyle='round,pad=0.45',facecolor=PANEL_BG,
+                                      edgecolor=MEAN_CLR,alpha=0.93))
             else:
                 ax.text(0.5,0.5,"Delta presente ma nessuna cella valida da disegnare",
                         ha='center',va='center',color=WARN_CLR,fontsize=12,
@@ -1443,12 +1514,6 @@ class ThicknessApp(tk.Tk):
             slot['tar_count'] = 0
             self._ae_db_slots.append(slot)
 
-        btn_row=ttk.Frame(lf_db); btn_row.pack(fill="x",pady=(4,0))
-        ttk.Button(btn_row,text="← Copia DB da PLC Reader",
-                   command=self._ae_copy_db_from_plc).pack(side="left",padx=2)
-        ttk.Button(btn_row,text="✗ Deseleziona tutti",
-                   command=self._ae_disable_all).pack(side="left",padx=2)
-
         # ── SQLite ────────────────────────────────────────────
         lf_sql=ttk.LabelFrame(left,text="  Archivio SQLite  ",padding=6)
         lf_sql.pack(fill="x",padx=6,pady=4)
@@ -1505,23 +1570,6 @@ class ThicknessApp(tk.Tk):
         self._alog("=== Auto-Export (multi-DB) ===\n","info")
         self._alog("Configura i DB slots, poi premi Avvia.\n\n")
         self._upd_ae_sql()
-
-    def _ae_copy_db_from_plc(self):
-        """Copia il DB number dal PLC Reader nel primo slot vuoto."""
-        db_val = self._pv_db.get().strip() if hasattr(self,'_pv_db') else ''
-        if not db_val: return
-        for slot in self._ae_db_slots:
-            if not slot['db_num'].get().strip():
-                slot['db_num'].set(db_val)
-                slot['enabled'].set(True)
-                return
-        # Se non c'è slot vuoto, mette nel primo
-        self._ae_db_slots[0]['db_num'].set(db_val)
-        self._ae_db_slots[0]['enabled'].set(True)
-
-    def _ae_disable_all(self):
-        for slot in self._ae_db_slots:
-            slot['enabled'].set(False)
 
     def _toggle_viewer_pause(self):
         self._viewer_paused = not self._viewer_paused
