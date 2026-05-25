@@ -6,6 +6,15 @@ La versione dell'app è definita da `APP_VERSION` in `thickness_viewer_v1_4_6.py
 Pubblicando un tag `vX.Y.Z` la CI builda l'exe e crea la release su GitHub
 (da cui l'auto-update dell'app scarica la nuova versione).
 
+## [1.4.11] - 2026-05-25
+
+### Corretto
+- **Pulsanti grigi nella barra strumenti del grafico.** I due quadrati grigi tratteggiati
+  erano i pulsanti Back/Forward di matplotlib, che nascono *disabilitati* (nessuna
+  cronologia zoom) e Tk li disegnava grigi; c'erano inoltre i separatori grigi e il
+  pulsante "Subplots" inutile. La toolbar è stata ridotta (`_MiniToolbar`) ai soli
+  pulsanti utili e sempre attivi: **Home, Pan, Zoom, Salva**. Niente più elementi grigi.
+
 ## [1.4.10] - 2026-05-25
 
 ### Corretto (auto-update)

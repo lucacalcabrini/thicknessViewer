@@ -19,7 +19,7 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.10"
+APP_VERSION = "1.4.11"
 APP_BUILD   = "2026-05-25"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
@@ -116,6 +116,18 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from matplotlib.figure import Figure
 from matplotlib.ticker import MultipleLocator
 import numpy as np
+
+
+class _MiniToolbar(NavigationToolbar2Tk):
+    """Toolbar matplotlib ridotta ai soli pulsanti utili.
+    Rimuove Back/Forward (che apparivano come quadrati grigi disabilitati),
+    il pulsante Subplots e i separatori grigi."""
+    toolitems = (
+        ('Home', 'Ripristina la vista iniziale', 'home', 'home'),
+        ('Pan',  'Sposta il grafico (trascina)', 'move', 'pan'),
+        ('Zoom', 'Zoom su area (rettangolo)',     'zoom_to_rect', 'zoom'),
+        ('Save', 'Salva il grafico come immagine', 'filesave', 'save_figure'),
+    )
 
 SNAP7_AVAILABLE = False
 try:
@@ -1005,22 +1017,27 @@ class ThicknessApp(tk.Tk):
         cv.get_tk_widget().pack(fill="both",expand=True,padx=4,pady=4)
         self._cv_p=cv
 
-        # ── Barra strumenti matplotlib (Pan / Zoom / Home …) ──
+        # ── Barra strumenti matplotlib ridotta (Home / Pan / Zoom / Salva) ──
         _TB="#1c2128"; _BTN="#2d333b"
         bot=tk.Frame(P,bg=_TB); bot.pack(fill="x",padx=4,pady=(0,3))
-        tk.Label(bot,text="🛠 Strumenti grafico →",bg=_TB,fg=MUTED_CLR,
+        tk.Label(bot,text="🛠 Home  ✋Pan  🔍Zoom  💾Salva →",bg=_TB,fg=MUTED_CLR,
                  font=("Consolas",8,"bold")).pack(side="left",padx=(4,8))
-        tb=NavigationToolbar2Tk(cv,bot)
+        tb=_MiniToolbar(cv,bot)
         tb.config(background=_TB)
         for _ch in tb.winfo_children():
-            try:
-                if _ch.winfo_class()=="Button":
+            cls=_ch.winfo_class()
+            if cls in ("Button","Checkbutton"):      # Pan/Zoom sono Checkbutton (toggle)
+                try:
                     _ch.config(bg=_BTN,activebackground=ACCENT,
                                relief="raised",bd=1,padx=3,pady=2)
-                else:
-                    _ch.config(bg=_TB,fg=MUTED_CLR)
-            except Exception:
-                pass
+                except Exception: pass
+                try: _ch.config(selectcolor=ACCENT)  # evidenzia il tool attivo
+                except Exception: pass
+            else:                                     # label coordinate, ecc.
+                try: _ch.config(bg=_TB)
+                except Exception: pass
+                try: _ch.config(fg=MUTED_CLR)
+                except Exception: pass
         tb.update()
 
     def _sax(self, ax):
