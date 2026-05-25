@@ -19,7 +19,7 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.7"
+APP_VERSION = "1.4.8"
 APP_BUILD   = "2026-05-25"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
@@ -896,16 +896,18 @@ class ThicknessApp(tk.Tk):
         self._ck_base=tk.BooleanVar(value=False)  # baseline nascosta di default
         self._ck_thresh=tk.BooleanVar(value=True)
         self._ck_nok=tk.BooleanVar(value=True)
-        self._ck_mean=tk.BooleanVar(value=True)   # linea spessore medio
-        self._ck_std=tk.BooleanVar(value=False)   # banda +/- dev.std
-        self._ck_stats=tk.BooleanVar(value=True)  # box statistiche
+        self._ck_mean=tk.BooleanVar(value=True)        # linea spessore medio (tutte le celle)
+        self._ck_std=tk.BooleanVar(value=False)        # banda +/- dev.std
+        self._ck_stats=tk.BooleanVar(value=True)       # box statistiche
+        self._ck_clean_mean=tk.BooleanVar(value=True)  # media celle entro soglia (esclusi NOK)
         for var,txt in [(self._ck_prof,"Profilo spessore"),
                         (self._ck_base,"Baseline (quota supporto)"),
                         (self._ck_thresh,"Soglie"),
                         (self._ck_nok,"Celle NOK"),
                         (self._ck_mean,"Spessore medio"),
                         (self._ck_std,"Banda ±σ"),
-                        (self._ck_stats,"Statistiche")]:
+                        (self._ck_stats,"Statistiche"),
+                        (self._ck_clean_mean,"Media celle OK")]:
             tk.Checkbutton(bar,text=txt,variable=var,bg=DARK_BG,fg=TEXT_CLR,
                 selectcolor="#1f6feb",activebackground=DARK_BG,font=("Consolas",9),
                 command=self._draw_profilo).pack(side="left",padx=4)
@@ -1035,18 +1037,29 @@ class ThicknessApp(tk.Tk):
                 dvalid = dlt_arr[mask_valid & np.isfinite(dlt_arr)]
                 n_nok  = int(np.count_nonzero(dvalid > sg))
                 n_warn = int(np.count_nonzero((dvalid > sg*0.70) & (dvalid <= sg)))
+                # celle entro soglia (escluse NOK)
+                mask_ok = mask_valid & np.isfinite(prof_arr) & np.isfinite(dlt_arr) & (dlt_arr <= sg)
+                prof_ok  = prof_arr[mask_ok]
+                clean_mean_v = float(np.mean(prof_ok)) if prof_ok.size else None
             else:
-                n_nok = n_warn = 0
+                n_nok = n_warn = 0; clean_mean_v = None; prof_ok = np.array([])
             if self._ck_std.get():
                 ax.axhspan(mean_v-std_v, mean_v+std_v, alpha=0.10,
                            color=MEAN_CLR, zorder=2,
                            label=f'Banda ±σ = {std_v:.3f} mm')
             if self._ck_mean.get():
                 ax.axhline(mean_v, color=MEAN_CLR, lw=1.7, ls='-.', alpha=0.95,
-                           label=f'Spessore medio: {mean_v:.3f} mm', zorder=6)
+                           label=f'Spessore medio (tutte): {mean_v:.3f} mm', zorder=6)
+            if self._ck_clean_mean.get() and clean_mean_v is not None:
+                ax.axhline(clean_mean_v, color=OK_CLR, lw=1.8, ls='--', alpha=0.92,
+                           label=f'Media celle OK ({prof_ok.size}c): {clean_mean_v:.3f} mm',
+                           zorder=7)
             if self._ck_stats.get():
+                cm_line = (f"med.ok  {clean_mean_v:7.3f} mm\n"
+                           if clean_mean_v is not None and self._ck_clean_mean.get() else "")
                 stats_txt=("STATISTICHE\n"
                            f"media   {mean_v:7.3f} mm\n"
+                           + cm_line +
                            f"min     {min_v:7.3f} mm\n"
                            f"max     {max_v:7.3f} mm\n"
                            f"dev.std {std_v:7.3f} mm\n"
