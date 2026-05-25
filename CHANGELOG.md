@@ -6,6 +6,13 @@ La versione dell'app è definita da `APP_VERSION` in `thickness_viewer_v1_4_6.py
 Pubblicando un tag `vX.Y.Z` la CI builda l'exe e crea la release su GitHub
 (da cui l'auto-update dell'app scarica la nuova versione).
 
+## [1.4.12] - 2026-05-25
+
+### Modificato
+- **Griglia Y default cambiato a 0.10 mm**: il passo verticale della griglia nel
+  grafico Profilo parte ora da `0.10 mm` (era `0.25 mm`), per una risoluzione più
+  fine già al primo avvio. Il valore rimane modificabile tramite il Combobox "Y [mm]".
+
 ## [1.4.11] - 2026-05-25
 
 ### Corretto

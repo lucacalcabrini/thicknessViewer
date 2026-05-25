@@ -19,7 +19,7 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.11"
+APP_VERSION = "1.4.12"
 APP_BUILD   = "2026-05-25"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
@@ -995,7 +995,7 @@ class ThicknessApp(tk.Tk):
                  font=("Consolas",8,"bold")).pack(side="left",padx=(4,6))
         tk.Label(bar2,text="Y [mm]:",bg=DARK_BG,fg=MUTED_CLR,
                  font=("Consolas",8)).pack(side="left")
-        self._pv_grid_y=tk.StringVar(value="0.25")
+        self._pv_grid_y=tk.StringVar(value="0.10")
         cb_y=ttk.Combobox(bar2,textvariable=self._pv_grid_y,
                           values=["0.10","0.25","0.50","1.00"],
                           width=5,state="readonly",font=("Consolas",8))
