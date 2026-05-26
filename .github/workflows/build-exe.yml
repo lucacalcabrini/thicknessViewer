@@ -35,26 +35,26 @@ jobs:
 
       - name: Build EXE with PyInstaller
         run: |
-          pyinstaller --onefile --windowed --icon=icon.ico --name "ThicknessProfiler_v${{ steps.version.outputs.ver }}" thickness_viewer_v1_4_6.pyw
+          pyinstaller --onefile --windowed --icon=icon.ico --name "ThicknessProfiler" thickness_viewer_v1_4_6.pyw
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: ThicknessProfiler-v${{ steps.version.outputs.ver }}-Windows
-          path: dist/ThicknessProfiler_v${{ steps.version.outputs.ver }}.exe
+          path: dist/ThicknessProfiler.exe
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
           name: "Thickness Profiler v${{ steps.version.outputs.ver }}"
-          files: dist/ThicknessProfiler_v${{ steps.version.outputs.ver }}.exe
+          files: dist/ThicknessProfiler.exe
           generate_release_notes: false
           body: |
             ## Thickness Profiler v${{ steps.version.outputs.ver }}
 
             ### Installazione
-            Scarica `ThicknessProfiler_v${{ steps.version.outputs.ver }}.exe` e avvialo direttamente.
+            Scarica `ThicknessProfiler.exe` e avvialo direttamente.
             Non richiede installazione di Python o librerie aggiuntive.
 
             ### Note
