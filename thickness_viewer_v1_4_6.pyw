@@ -19,7 +19,7 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.12"
+APP_VERSION = "1.4.13"
 APP_BUILD   = "2026-05-25"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
@@ -825,8 +825,6 @@ class ThicknessApp(tk.Tk):
             font=("Consolas",9,"bold"),bg=ACCENT,fg=DARK_BG,
             relief="flat",padx=6,command=self._toggle_viewer_pause)
         self._btn_pause.pack(side="left",padx=4)
-        ttk.Button(top,text="💾 PNG grafico",
-                   command=self._save_plot_current).pack(side="right",padx=2)
         ttk.Button(top,text="⚙ Impostazioni",
                    command=self._open_settings).pack(side="right",padx=2)
 
@@ -985,10 +983,6 @@ class ThicknessApp(tk.Tk):
             tk.Checkbutton(bar,text=txt,variable=var,bg=DARK_BG,fg=TEXT_CLR,
                 selectcolor="#1f6feb",activebackground=DARK_BG,font=("Consolas",9),
                 command=self._draw_profilo).pack(side="left",padx=4)
-        ttk.Button(bar,text="🔄",command=self._draw_all).pack(side="right",padx=2)
-        ttk.Button(bar,text="💾 PNG",
-                   command=lambda:self._save_plot(self.fig_p)).pack(side="right",padx=2)
-
         # ── Riga 2: controllo passo griglia ───────────────────
         bar2=ttk.Frame(P); bar2.pack(fill="x",padx=4,pady=(0,2))
         tk.Label(bar2,text="Griglia:",bg=DARK_BG,fg=MUTED_CLR,
@@ -1248,9 +1242,6 @@ class ThicknessApp(tk.Tk):
             tk.Checkbutton(bar,text=txt,variable=var,bg=DARK_BG,fg=TEXT_CLR,
                 selectcolor="#1f6feb",activebackground=DARK_BG,font=("Consolas",9),
                 command=self._draw_delta).pack(side="left",padx=8)
-        ttk.Button(bar,text="🔄",command=self._draw_delta).pack(side="right",padx=2)
-        ttk.Button(bar,text="💾 PNG",
-                   command=lambda:self._save_plot(self.fig_d)).pack(side="right",padx=2)
         self.fig_d=Figure(figsize=(10,6),dpi=95,facecolor=DARK_BG)
         self.ax_d=self.fig_d.add_subplot(111,facecolor=PANEL_BG)
         self._sax(self.ax_d)
@@ -2058,20 +2049,6 @@ class ThicknessApp(tk.Tk):
 
     # ── HELPERS ──────────────────────────────────────────────
     def app_log(self, msg, *_): self._lbl_st.config(text=msg)
-
-    def _save_plot_current(self):
-        """Salva il grafico del tab attivo."""
-        idx = self._nb.index(self._nb.select())
-        fig = self.fig_p if idx == 0 else self.fig_d
-        self._save_plot(fig)
-
-    def _save_plot(self, fig):
-        fp=filedialog.asksaveasfilename(title="Salva PNG",defaultextension=".png",
-            initialdir=get_app_dir(),
-            filetypes=[("PNG","*.png"),("SVG","*.svg"),("PDF","*.pdf")])
-        if not fp: return
-        try: fig.savefig(fp,dpi=150,facecolor=DARK_BG,bbox_inches='tight')
-        except Exception as e: messagebox.showerror("Errore",str(e))
 
     def _open_path(self, path):
         try:

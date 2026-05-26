@@ -6,6 +6,14 @@ La versione dell'app è definita da `APP_VERSION` in `thickness_viewer_v1_4_6.py
 Pubblicando un tag `vX.Y.Z` la CI builda l'exe e crea la release su GitHub
 (da cui l'auto-update dell'app scarica la nuova versione).
 
+## [1.4.13] - 2026-05-26
+
+### Rimosso
+- **Pulsanti PNG superflui**: rimossi i pulsanti "💾 PNG grafico" (barra superiore),
+  "💾 PNG" e "🔄" dai tab Profilo e Delta. Il salvataggio immagine rimane disponibile
+  tramite il pulsante 💾 nella toolbar matplotlib in basso (accanto a Zoom).
+  Rimosse anche le funzioni `_save_plot` e `_save_plot_current`.
+
 ## [1.4.12] - 2026-05-25
 
 ### Modificato
