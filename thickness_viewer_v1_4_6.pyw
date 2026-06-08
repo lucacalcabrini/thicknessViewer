@@ -19,7 +19,7 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.13"
+APP_VERSION = "1.4.14"
 APP_BUILD   = "2026-05-25"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
@@ -1217,7 +1217,7 @@ class ThicknessApp(tk.Tk):
         except Exception:
             pass
 
-        self.fig_p.tight_layout(); self._cv_p.draw_idle()
+        self.fig_p.tight_layout(); self._cv_p.draw()   # draw() sincrono: evita starvation idle con auto-export
 
     @staticmethod
     def _gs(sc,*keys,default=0.0):
@@ -1341,7 +1341,7 @@ class ThicknessApp(tk.Tk):
         leg=ax.legend(loc='upper right',fontsize=8,framealpha=0.90,
                       facecolor=PANEL_BG,edgecolor=BORDER_CLR,labelcolor=TEXT_CLR)
         if leg: leg.get_frame().set_facecolor(PANEL_BG)
-        self.fig_d.tight_layout(); self._cv_d.draw_idle()
+        self.fig_d.tight_layout(); self._cv_d.draw()   # draw() sincrono: evita starvation idle con auto-export
     # ══════════════════════════════════════════════════════════
     #  TAB 3 — PLC READER
     # ══════════════════════════════════════════════════════════
@@ -1861,11 +1861,9 @@ class ThicknessApp(tk.Tk):
             except (ValueError, AttributeError):
                 slot_idx = -1
             if slot_idx == viewer_idx:
-                try:
-                    txt=gen_db_text(dec,f"DB{db}_#{rid}_{prefix}")
-                    self._load_data(parse_db_text(txt,f"DB{db} #{rid}"))
-                except Exception:
-                    pass
+                # Passa dec direttamente: niente roundtrip gen_db_text/parse_db_text
+                view_data = {**dec, 'filename': f"DB{db} #{rid} {prefix.strip()}"}
+                self._load_data(view_data)
 
     # ══════════════════════════════════════════════════════════
     #  TAB 5 — HISTORY

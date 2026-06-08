@@ -6,6 +6,18 @@ La versione dell'app è definita da `APP_VERSION` in `thickness_viewer_v1_4_6.py
 Pubblicando un tag `vX.Y.Z` la CI builda l'exe e crea la release su GitHub
 (da cui l'auto-update dell'app scarica la nuova versione).
 
+## [1.4.14] - 2026-06-08
+
+### Corretto
+- **Grafici bloccati con Auto-Export attivo.** Causa: i read PLC (blocco sincrono
+  di ~200-300 ms sul main thread) consumavano l'intero intervallo di polling,
+  impedendo a Tk di elaborare i callback `draw_idle()` pendenti → canvas mai
+  ridisegnato. Fix: cambiato `draw_idle()` → `draw()` in `_draw_profilo` e
+  `_draw_delta` (ridisegno sincrono immediato, non rimandato a idle).
+- **Roundtrip inutile `gen_db_text`→`parse_db_text` in `_ae_trigger`** rimosso:
+  il dict `dec` già pronto viene passato direttamente a `_load_data`, eliminando
+  serializzazione/parsing superflui e possibili perdite di precisione.
+
 ## [1.4.13] - 2026-05-26
 
 ### Rimosso
