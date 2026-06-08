@@ -19,7 +19,7 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.14"
+APP_VERSION = "1.4.15"
 APP_BUILD   = "2026-05-25"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
@@ -1217,7 +1217,9 @@ class ThicknessApp(tk.Tk):
         except Exception:
             pass
 
-        self.fig_p.tight_layout(); self._cv_p.draw()   # draw() sincrono: evita starvation idle con auto-export
+        try: self.fig_p.tight_layout()
+        except Exception: pass
+        self._cv_p.draw()
 
     @staticmethod
     def _gs(sc,*keys,default=0.0):
@@ -1341,7 +1343,9 @@ class ThicknessApp(tk.Tk):
         leg=ax.legend(loc='upper right',fontsize=8,framealpha=0.90,
                       facecolor=PANEL_BG,edgecolor=BORDER_CLR,labelcolor=TEXT_CLR)
         if leg: leg.get_frame().set_facecolor(PANEL_BG)
-        self.fig_d.tight_layout(); self._cv_d.draw()   # draw() sincrono: evita starvation idle con auto-export
+        try: self.fig_d.tight_layout()
+        except Exception: pass
+        self._cv_d.draw()
     # ══════════════════════════════════════════════════════════
     #  TAB 3 — PLC READER
     # ══════════════════════════════════════════════════════════
@@ -1809,6 +1813,10 @@ class ThicknessApp(tk.Tk):
             self._pv_ae_st.set("● Errore")
 
         if self._ae_running:
+            # Forza il repaint del canvas Tk prima di schedulare il prossimo poll.
+            # draw() su TkAgg schedula il blit come idle → verrebbe soffocato dal
+            # poll successivo. update_idletasks() lo scarica subito.
+            self.update_idletasks()
             try: ms = max(20, int(self._pv_poll.get()))
             except: ms = 50
             self._ae_timer = self.after(ms, self._ae_poll)

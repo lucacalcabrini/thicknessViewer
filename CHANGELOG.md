@@ -6,6 +6,17 @@ La versione dell'app è definita da `APP_VERSION` in `thickness_viewer_v1_4_6.py
 Pubblicando un tag `vX.Y.Z` la CI builda l'exe e crea la release su GitHub
 (da cui l'auto-update dell'app scarica la nuova versione).
 
+## [1.4.15] - 2026-06-08
+
+### Corretto
+- **Grafico ancora bloccato con Auto-Export.** Anche `draw()` su TkAgg schedula
+  internamente il blit della PhotoImage come evento *idle*, che veniva comunque
+  soffocato dal ciclo di polling. Fix: aggiunto `self.update_idletasks()` al
+  termine di ogni ciclo `_ae_poll`, che scarica tutti i repaint pendenti **prima**
+  di rimettere in coda il prossimo poll.
+- `tight_layout()` separato da `draw()` con proprio try/except: se lancia
+  (edge case con assi gemelli) non blocca più il disegno del canvas.
+
 ## [1.4.14] - 2026-06-08
 
 ### Corretto
