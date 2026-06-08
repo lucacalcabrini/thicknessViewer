@@ -6,6 +6,17 @@ La versione dell'app è definita da `APP_VERSION` in `thickness_viewer_v1_4_6.py
 Pubblicando un tag `vX.Y.Z` la CI builda l'exe e crea la release su GitHub
 (da cui l'auto-update dell'app scarica la nuova versione).
 
+## [1.4.16] - 2026-06-08
+
+### Corretto
+- **Grafico ancora bloccato / statistiche non aggiornate completamente.**
+  `ax.clear()` lasciava residui interni di matplotlib (tick locator, limiti,
+  artisti del twin-axis). Sostituito con `fig.clf()` + `add_subplot()` in entrambi
+  i grafici (Profilo e Delta): la figura viene distrutta e ricostruita da zero
+  a ogni aggiornamento, garantendo nessun dato residuo del ciclo precedente.
+  Aggiunto `get_tk_widget().update_idletasks()` dopo `draw()` per forzare il
+  blit del PhotoImage sullo schermo indipendentemente dallo stato idle di Tk.
+
 ## [1.4.15] - 2026-06-08
 
 ### Corretto

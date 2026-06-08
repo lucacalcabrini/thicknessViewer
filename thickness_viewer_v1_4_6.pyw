@@ -19,7 +19,7 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.15"
+APP_VERSION = "1.4.16"
 APP_BUILD   = "2026-05-25"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
@@ -1063,11 +1063,11 @@ class ThicknessApp(tk.Tk):
         return prof, dlt, bas, nraw, mask
 
     def _draw_profilo(self):
-        ax=self.ax_p
-        for extra_ax in list(self.fig_p.axes):
-            if extra_ax is not ax:
-                extra_ax.remove()
-        ax.clear(); self._sax(ax)
+        # Ricostruzione completa: clf() + nuovo subplot garantisce slate pulita
+        self.fig_p.clf()
+        self.ax_p = self.fig_p.add_subplot(111, facecolor=PANEL_BG)
+        self._sax(self.ax_p)
+        ax = self.ax_p
         if self.db_data is None:
             ax.text(0.5,0.5,"Nessun dato - leggi dal PLC o apri una riga History",
                     ha='center',va='center',color=MUTED_CLR,fontsize=12,
@@ -1220,6 +1220,7 @@ class ThicknessApp(tk.Tk):
         try: self.fig_p.tight_layout()
         except Exception: pass
         self._cv_p.draw()
+        self._cv_p.get_tk_widget().update_idletasks()
 
     @staticmethod
     def _gs(sc,*keys,default=0.0):
@@ -1252,7 +1253,10 @@ class ThicknessApp(tk.Tk):
         self._cv_d=cv
 
     def _draw_delta(self):
-        ax=self.ax_d; ax.clear(); self._sax(ax)
+        self.fig_d.clf()
+        self.ax_d = self.fig_d.add_subplot(111, facecolor=PANEL_BG)
+        self._sax(self.ax_d)
+        ax = self.ax_d
         if self.db_data is None:
             ax.text(0.5,0.5,"Nessun dato",ha='center',va='center',
                     color=MUTED_CLR,fontsize=12,transform=ax.transAxes)
@@ -1346,6 +1350,7 @@ class ThicknessApp(tk.Tk):
         try: self.fig_d.tight_layout()
         except Exception: pass
         self._cv_d.draw()
+        self._cv_d.get_tk_widget().update_idletasks()
     # ══════════════════════════════════════════════════════════
     #  TAB 3 — PLC READER
     # ══════════════════════════════════════════════════════════
