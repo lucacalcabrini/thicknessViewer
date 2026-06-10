@@ -1137,7 +1137,7 @@ class ThicknessApp(tk.Tk):
 
     def _draw_all(self): self._draw_profilo(); self._draw_delta()
 
-    def _profile_arrays(self, ar, n=ARRAY_SIZE):
+    def _profile_arrays(self, ar, n=ARRAY_SIZE, n_cells=0):
         prof = np.array(ar.get('aProfiloSpessore', [])[:n], dtype=float) if len(ar.get('aProfiloSpessore', [])) >= n else None
         dlt  = np.array(ar.get('aProfiloDelta', [])[:n], dtype=float) if len(ar.get('aProfiloDelta', [])) >= n else None
         bas  = np.array(ar.get('aBaseline', [])[:n], dtype=float) if len(ar.get('aBaseline', [])) >= n else None
@@ -1155,6 +1155,13 @@ class ThicknessApp(tk.Tk):
             mask &= np.isfinite(prof) & (prof > -100.0) & (prof < 1000.0)
         if dlt is not None:
             mask &= np.isfinite(dlt) & (np.abs(dlt) < 1000.0)
+
+        # Limita alle sole celle effettivamente misurate nel ciclo corrente.
+        # Il PLC non azzera le celle non usate tra un disco e l'altro, quindi
+        # senza questo taglio le celle 39-200 mostrerebbero dati del ciclo precedente.
+        if 0 < n_cells < n:
+            mask[n_cells:] = False
+
         return prof, dlt, bas, nraw, mask
 
     def _draw_profilo(self):
@@ -1178,7 +1185,8 @@ class ThicknessApp(tk.Tk):
 
         n=ARRAY_SIZE
         x=np.linspace(pc-rc, pc+rc, n)
-        prof_arr, dlt_arr, bas_arr, nraw_arr, mask_valid = self._profile_arrays(ar,n)
+        n_cells = int(sc.get('AppNcelleProfilo', sc.get('O_nCelleProfilo', 0)))
+        prof_arr, dlt_arr, bas_arr, nraw_arr, mask_valid = self._profile_arrays(ar, n, n_cells)
         plotted=False
 
         if bas_arr is not None and self._ck_base.get():
@@ -1362,8 +1370,8 @@ class ThicknessApp(tk.Tk):
         sg  = self._gs(sc,'I_ParametriCntrolloSpessore.SpessoreMassimo','SpessoreMassimo',default=1.0)
         sp_att = self._gs(sc,'I_SpessoreAtteso',default=2.98)
         n=ARRAY_SIZE; x=np.linspace(pc-rc,pc+rc,n)
-
-        prof_arr, dlt_arr, bas_arr, nraw_arr, mask_valid = self._profile_arrays(ar,n)
+        n_cells = int(sc.get('AppNcelleProfilo', sc.get('O_nCelleProfilo', 0)))
+        prof_arr, dlt_arr, bas_arr, nraw_arr, mask_valid = self._profile_arrays(ar, n, n_cells)
         if dlt_arr is not None:
             mask=mask_valid & np.isfinite(dlt_arr)
             if mask.any():
