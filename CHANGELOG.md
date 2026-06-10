@@ -6,6 +6,14 @@ La versione dell'app è definita da `APP_VERSION` in `thickness_viewer_v1_4_6.py
 Pubblicando un tag `vX.Y.Z` la CI builda l'exe e crea la release su GitHub
 (da cui l'auto-update dell'app scarica la nuova versione).
 
+## [1.4.20] - 2026-06-10
+
+### Corretto
+- **Controllo aggiornamenti all'avvio sempre attivo.** Indipendentemente dal flag
+  "aggiornamenti automatici", l'app controlla una volta all'avvio se esiste una
+  versione più recente su GitHub. Il controllo periodico (timer) rimane opzionale
+  e si attiva solo se `auto_update = true`.
+
 ## [1.4.19] - 2026-06-10
 
 ### Modificato

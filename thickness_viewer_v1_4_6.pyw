@@ -19,7 +19,7 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.19"
+APP_VERSION = "1.4.20"
 APP_BUILD   = "2026-06-10"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
@@ -636,7 +636,7 @@ class ThicknessApp(tk.Tk):
         self.after(500, self._startup)
         self.after(100, self._cleanup_update_leftovers)
         self.after(800, self._check_and_apply_resume)
-        self.after(2000, self._schedule_update_check)
+        self.after(2000, lambda: self._schedule_update_check(first=True))
 
     # ── AUTO-UPDATE ───────────────────────────────────────────
     _GITHUB_REPO = "lucacalcabrini/thicknessViewer"
@@ -781,15 +781,18 @@ class ThicknessApp(tk.Tk):
                 parent=self))
 
     # ── Periodic update check ────────────────────────────────
-    def _schedule_update_check(self):
-        if not self._cfg.getboolean('UPDATE', 'auto_update', fallback=False):
-            return
-        self._check_for_updates()
-        try:
-            mins = max(1, int(self._cfg.get('UPDATE', 'check_interval_min', fallback='5')))
-        except (ValueError, TypeError):
-            mins = 5
-        self._update_check_timer = self.after(mins * 60 * 1000, self._schedule_update_check)
+    def _schedule_update_check(self, first=False):
+        # All'avvio (first=True) controlla sempre; le chiamate periodiche solo se auto_update abilitato
+        auto = self._cfg.getboolean('UPDATE', 'auto_update', fallback=False)
+        if first or auto:
+            self._check_for_updates()
+        # Schedula il prossimo controllo solo se l'auto_update è attivo
+        if auto:
+            try:
+                mins = max(1, int(self._cfg.get('UPDATE', 'check_interval_min', fallback='5')))
+            except (ValueError, TypeError):
+                mins = 5
+            self._update_check_timer = self.after(mins * 60 * 1000, self._schedule_update_check)
 
     # ── Resume state ─────────────────────────────────────────
     def _collect_resume_state(self):
