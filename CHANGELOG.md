@@ -6,6 +6,13 @@ La versione dell'app è definita da `APP_VERSION` in `thickness_viewer_v1_4_6.py
 Pubblicando un tag `vX.Y.Z` la CI builda l'exe e crea la release su GitHub
 (da cui l'auto-update dell'app scarica la nuova versione).
 
+## [1.4.18] - 2026-06-10
+
+### Modificato
+- **Solo bump di versione** (1.4.17 → 1.4.18) per verificare end-to-end il
+  meccanismo di auto-update periodico introdotto nella 1.4.17. Nessuna modifica
+  funzionale al codice.
+
 ## [1.4.17] - 2026-06-10
 
 ### Aggiunto
