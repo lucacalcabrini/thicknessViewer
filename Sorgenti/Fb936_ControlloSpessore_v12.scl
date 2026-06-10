@@ -441,11 +441,11 @@ BEGIN
 	        #AppMinIndexSurce := 0;
 	        #AppMaxIndexSurce := 0;
 	        #AppMaxIndex := 0;
-	        // Reset buffer misura solo se NON in taratura
+	        // Reset buffer acquisizione solo se NON in taratura
 	        IF NOT #taraturaInCorso THEN
 	            FOR #i := 0 TO #MaxData DO
 	                #aSomRaw[#i] := 0.0;
-	                #aNraw[#i] := 0;
+	                #aNraw[#i]   := 0;
 	            END_FOR;
 	        END_IF;
 	    END_IF;
@@ -472,6 +472,17 @@ BEGIN
 	    
 	    // ═══ FINE PASSATA: elaborazione risultati ════════════════════════════
 	    IF (#Fn.Q OR #Ripeti) THEN
+	        
+	        // ═══ RESET array profilo prima dell'elaborazione ════════════════════
+	        // Azzera aProfiloSpessore e aProfiloDelta: le celle non campionate
+	        // nella passata corrente resteranno a 0.0 invece di mostrare dati
+	        // del disco precedente (che ha potuto coprire celle diverse).
+	        IF NOT #taraturaInCorso THEN
+	            FOR #i := 0 TO #MaxData DO
+	                #aProfiloSpessore[#i] := 0.0;
+	                #aProfiloDelta[#i]    := 0.0;
+	            END_FOR;
+	        END_IF;
 	        
 	        IF #taraturaInCorso THEN
 	            // ─── RAMO TARATURA ────────────────────────────────────────────
@@ -515,8 +526,8 @@ BEGIN
 	            //     aProfiloDelta = negativo → mai > SpessoreMassimo → mai NOK (sicuro)
 	            //     Richiedere taratura prima dell'uso in produzione.
 	            //
-	            //   Celle non campionate (aNraw=0): mantengono il valore della passata
-	            //   precedente → profilo continuo sull'HMI. Il check NOK usa aNraw > 0.
+	            //   Celle non campionate (aNraw=0): aProfiloSpessore e aProfiloDelta
+	            //   sono già azzerati prima dell'elaborazione, quindi rimangono 0.
 	            
 	            #AppSpessoreMedio := 0.0;
 	            #AppSpessoreMax := 0.0;

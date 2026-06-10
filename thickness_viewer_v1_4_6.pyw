@@ -19,8 +19,8 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.16"
-APP_BUILD   = "2026-05-25"
+APP_VERSION = "1.4.17"
+APP_BUILD   = "2026-06-10"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
 FB_SCL_NAME = '"Fb936_ControlloSpessore_v12"'
@@ -149,11 +149,13 @@ def get_app_dir():
 SETTINGS_FILE = "thickness_viewer.ini"
 
 PROGRAMDATA_INI = r"C:\ProgramData\ThicknessViewer\thickness_viewer.ini"
+PROGRAMDATA_RESUME = r"C:\ProgramData\ThicknessViewer\resume_state.json"
 
 def load_settings():
     cfg = configparser.ConfigParser()
     cfg['PLC'] = {'ip':'192.168.0.1','rack':'0','slot':'1','db':'16070'}
     cfg['SQL'] = {'path':'thickness_archive.sqlite'}
+    cfg['UPDATE'] = {'auto_update':'false','check_interval_min':'5'}
     if not os.path.isfile(PROGRAMDATA_INI):
         try:
             os.makedirs(os.path.dirname(PROGRAMDATA_INI), exist_ok=True)
@@ -173,6 +175,38 @@ def save_settings(cfg):
 
 def resolve_sql(raw):
     return raw if os.path.isabs(raw) else os.path.join(get_app_dir(), raw)
+
+
+# ══════════════════════════════════════════════════════════════════
+#  RESUME STATE
+# ══════════════════════════════════════════════════════════════════
+
+def load_resume_state():
+    try:
+        if os.path.isfile(PROGRAMDATA_RESUME):
+            import json
+            with open(PROGRAMDATA_RESUME, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return None
+
+def save_resume_state(state):
+    try:
+        import json
+        os.makedirs(os.path.dirname(PROGRAMDATA_RESUME), exist_ok=True)
+        with open(PROGRAMDATA_RESUME, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=2)
+        return True
+    except Exception:
+        return False
+
+def delete_resume_state():
+    try:
+        if os.path.isfile(PROGRAMDATA_RESUME):
+            os.remove(PROGRAMDATA_RESUME)
+    except Exception:
+        pass
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -586,6 +620,7 @@ class ThicknessApp(tk.Tk):
         self._ae_cok = self._ae_cnok = self._ae_ctar = 0
         self._ae_sql_con = None
         self._ae_prev    = None
+        self._update_check_timer = None
         # Multi-DB: lista di dict con {enabled, db_num, label, prev_counter}
         # Costruita in _tab_autoexp, modificabile a runtime
         self._ae_db_slots = []
@@ -600,8 +635,8 @@ class ThicknessApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(500, self._startup)
         self.after(100, self._cleanup_update_leftovers)
-        # Controlla aggiornamenti GitHub (non bloccante, timeout 5s)
-        self.after(300, self._check_for_updates)
+        self.after(800, self._check_and_apply_resume)
+        self.after(2000, self._schedule_update_check)
 
     # ── AUTO-UPDATE ───────────────────────────────────────────
     _GITHUB_REPO = "lucacalcabrini/thicknessViewer"
@@ -649,21 +684,15 @@ class ThicknessApp(tk.Tk):
             pass  # nessuna connessione o errore → prosegue normalmente
 
     def _offer_update(self, new_ver, url, filename, size_bytes):
+        import threading
         size_mb = size_bytes / 1024 / 1024
-        if messagebox.askyesno(
-            "🔄 Aggiornamento disponibile",
-            f"Versione  v{new_ver}  disponibile!\n"
-            f"Versione attuale:  v{APP_VERSION}\n\n"
-            f"Dimensione:  {size_mb:.1f} MB\n\n"
-            f"Scarico e riavvio ora?",
-            parent=self
-        ):
-            import threading
-            threading.Thread(
-                target=self._download_and_restart,
-                args=(url, filename),
-                daemon=True
-            ).start()
+        self.app_log(
+            f"⬇  v{new_ver} disponibile ({size_mb:.1f} MB) — download in corso…")
+        threading.Thread(
+            target=self._download_and_restart,
+            args=(url, filename),
+            daemon=True
+        ).start()
 
     def _cleanup_update_leftovers(self):
         """All'avvio rimuove i file temporanei di update (.upd) e i vecchi
@@ -733,6 +762,7 @@ class ThicknessApp(tk.Tk):
         # Lancia il nuovo exe (staging) che si copierà sopra exe_path e riavvierà
         try:
             _RESTARTING = True   # impedisce a _kill_tree (/T) di uccidere il figlio
+            save_resume_state(self._collect_resume_state())
             subprocess.Popen(
                 [staging, "--apply-update", exe_path, str(os.getpid())],
                 creationflags=subprocess.DETACHED_PROCESS
@@ -741,6 +771,7 @@ class ThicknessApp(tk.Tk):
             self.after(0, self.destroy)
         except Exception as e:
             _RESTARTING = False
+            delete_resume_state()
             if os.path.isfile(staging):
                 try: os.remove(staging)
                 except Exception: pass
@@ -748,6 +779,66 @@ class ThicknessApp(tk.Tk):
                 "Errore aggiornamento",
                 f"Impossibile avviare la nuova versione:\n{err}",
                 parent=self))
+
+    # ── Periodic update check ────────────────────────────────
+    def _schedule_update_check(self):
+        if not self._cfg.getboolean('UPDATE', 'auto_update', fallback=False):
+            return
+        self._check_for_updates()
+        try:
+            mins = max(1, int(self._cfg.get('UPDATE', 'check_interval_min', fallback='5')))
+        except (ValueError, TypeError):
+            mins = 5
+        self._update_check_timer = self.after(mins * 60 * 1000, self._schedule_update_check)
+
+    # ── Resume state ─────────────────────────────────────────
+    def _collect_resume_state(self):
+        slots = []
+        for slot in getattr(self, '_ae_db_slots', []):
+            slots.append({
+                'enabled': slot['enabled'].get(),
+                'db_num':  slot['db_num'].get().strip()
+            })
+        return {
+            'autoexport_running': bool(getattr(self, '_ae_running', False)),
+            'plc_ip':   self._pv_ip.get().strip()   if hasattr(self, '_pv_ip')   else self._cfg['PLC'].get('ip',   ''),
+            'plc_rack': self._pv_rack.get()          if hasattr(self, '_pv_rack') else self._cfg['PLC'].get('rack', '0'),
+            'plc_slot': self._pv_slot.get()          if hasattr(self, '_pv_slot') else self._cfg['PLC'].get('slot', '1'),
+            'poll_ms':  int(self._pv_poll.get() or 50)        if hasattr(self, '_pv_poll')       else 50,
+            'archive_tarature': self._pv_ae_tar.get()         if hasattr(self, '_pv_ae_tar')     else True,
+            'viewer_slot':      self._ae_viewer_var.get()     if hasattr(self, '_ae_viewer_var') else 0,
+            'slots': slots,
+        }
+
+    def _check_and_apply_resume(self):
+        state = load_resume_state()
+        if state is None:
+            return
+        delete_resume_state()
+        self._apply_resume_state(state)
+
+    def _apply_resume_state(self, state):
+        try:
+            if hasattr(self, '_pv_ip')   and 'plc_ip'   in state: self._pv_ip.set(state['plc_ip'])
+            if hasattr(self, '_pv_rack') and 'plc_rack' in state: self._pv_rack.set(str(state['plc_rack']))
+            if hasattr(self, '_pv_slot') and 'plc_slot' in state: self._pv_slot.set(str(state['plc_slot']))
+        except Exception:
+            pass
+        try:
+            if hasattr(self, '_pv_poll'):       self._pv_poll.set(str(state.get('poll_ms', 50)))
+            if hasattr(self, '_pv_ae_tar'):     self._pv_ae_tar.set(state.get('archive_tarature', True))
+            if hasattr(self, '_ae_viewer_var'): self._ae_viewer_var.set(state.get('viewer_slot', 0))
+            for i, sd in enumerate(state.get('slots', [])):
+                if i < len(self._ae_db_slots):
+                    self._ae_db_slots[i]['enabled'].set(sd.get('enabled', False))
+                    self._ae_db_slots[i]['db_num'].set(sd.get('db_num', ''))
+        except Exception:
+            pass
+        if state.get('autoexport_running', False):
+            self.app_log("▶ Ripristino Auto-Export dopo aggiornamento…")
+            self.after(500, self._ae_start)
+        else:
+            self.app_log("✓ Configurazione ripristinata dopo aggiornamento")
 
     # ── Settings ─────────────────────────────────────────────
     def _save_ini(self):
@@ -763,6 +854,10 @@ class ThicknessApp(tk.Tk):
 
     def _on_close(self):
         if self._ae_running: self._ae_stop()
+        if self._update_check_timer:
+            try: self.after_cancel(self._update_check_timer)
+            except Exception: pass
+            self._update_check_timer = None
         self._save_ini()
         try: self.destroy()
         except Exception: pass
@@ -1050,11 +1145,18 @@ class ThicknessApp(tk.Tk):
 
         mask = np.zeros(n, dtype=bool)
         if nraw is not None:
+            # Con PLC v1.2+: aNraw viene azzerata a ogni Fp.Q, quindi nraw > 0
+            # identifica ESATTAMENTE le celle campionate nella passata corrente,
+            # indipendentemente dalla loro posizione nell'array.
             mask |= nraw > 0
-        if prof is not None:
-            mask |= np.isfinite(prof) & (np.abs(prof) > 1e-6)
-        if dlt is not None:
-            mask |= np.isfinite(dlt) & (np.abs(dlt) > 1e-6)
+        else:
+            # Fallback per dati da file .db (senza aNraw): usa prof != 0.
+            # Con PLC v1.2+ aProfiloSpessore è anch'essa azzerata al Fp.Q,
+            # quindi anche questo fallback produce il risultato corretto.
+            if prof is not None:
+                mask |= np.isfinite(prof) & (np.abs(prof) > 1e-6)
+            if dlt is not None:
+                mask |= np.isfinite(dlt) & (np.abs(dlt) > 1e-6)
 
         if prof is not None:
             mask &= np.isfinite(prof) & (prof > -100.0) & (prof < 1000.0)
@@ -1083,7 +1185,7 @@ class ThicknessApp(tk.Tk):
 
         n=ARRAY_SIZE
         x=np.linspace(pc-rc, pc+rc, n)
-        prof_arr, dlt_arr, bas_arr, nraw_arr, mask_valid = self._profile_arrays(ar,n)
+        prof_arr, dlt_arr, bas_arr, nraw_arr, mask_valid = self._profile_arrays(ar, n)
         plotted=False
 
         if bas_arr is not None and self._ck_base.get():
@@ -1267,8 +1369,7 @@ class ThicknessApp(tk.Tk):
         sg  = self._gs(sc,'I_ParametriCntrolloSpessore.SpessoreMassimo','SpessoreMassimo',default=1.0)
         sp_att = self._gs(sc,'I_SpessoreAtteso',default=2.98)
         n=ARRAY_SIZE; x=np.linspace(pc-rc,pc+rc,n)
-
-        prof_arr, dlt_arr, bas_arr, nraw_arr, mask_valid = self._profile_arrays(ar,n)
+        prof_arr, dlt_arr, bas_arr, nraw_arr, mask_valid = self._profile_arrays(ar, n)
         if dlt_arr is not None:
             mask=mask_valid & np.isfinite(dlt_arr)
             if mask.any():
@@ -1990,7 +2091,7 @@ class ThicknessApp(tk.Tk):
         dlg=tk.Toplevel(self)
         dlg.title("Impostazioni — Thickness Profiler")
         dlg.configure(bg=DARK_BG)
-        dlg.geometry("460x360")
+        dlg.geometry("460x470")
         dlg.resizable(False,False)
         dlg.grab_set(); dlg.transient(self)
 
@@ -2036,6 +2137,19 @@ class ThicknessApp(tk.Tk):
                 except: sv_sql.set(fp)
         ttk.Button(r_sql,text="…",width=3,command=_browse).pack(side="left")
 
+        upd_lf=ttk.LabelFrame(dlg,text="  Aggiornamenti automatici  ",padding=10)
+        upd_lf.pack(fill="x",padx=14,pady=4)
+        sv_au=tk.BooleanVar(value=self._cfg.getboolean('UPDATE','auto_update',fallback=False))
+        sv_interval=tk.StringVar(value=self._cfg.get('UPDATE','check_interval_min',fallback='5'))
+        tk.Checkbutton(upd_lf,text="Abilita aggiornamenti automatici",variable=sv_au,
+            bg=DARK_BG,fg=TEXT_CLR,selectcolor="#1f6feb",activebackground=DARK_BG,
+            font=("Consolas",10),anchor="w").pack(fill="x",pady=(0,4))
+        r_int=ttk.Frame(upd_lf); r_int.pack(fill="x")
+        ttk.Label(r_int,text="Controlla ogni:",style="Muted.TLabel",width=13).pack(side="left")
+        ttk.Entry(r_int,textvariable=sv_interval,width=6,
+                  font=("Consolas",10)).pack(side="left",padx=4)
+        ttk.Label(r_int,text="minuti",style="Muted.TLabel").pack(side="left")
+
         info_lf=ttk.LabelFrame(dlg,text="  File configurazione  ",padding=6)
         info_lf.pack(fill="x",padx=14,pady=6)
         tk.Label(info_lf,text=PROGRAMDATA_INI,bg=DARK_BG,fg=ACCENT,
@@ -2045,8 +2159,18 @@ class ThicknessApp(tk.Tk):
             self._cfg['PLC']={'ip':sv_ip.get().strip(),'rack':sv_rack.get(),
                               'slot':sv_slot.get(),'db':sv_db.get()}
             self._cfg['SQL']={'path':sv_sql.get()}
+            self._cfg['UPDATE']={
+                'auto_update':        str(sv_au.get()).lower(),
+                'check_interval_min': sv_interval.get().strip() or '5',
+            }
             if save_settings(self._cfg):
                 self._upd_ae_sql()
+                if self._update_check_timer:
+                    try: self.after_cancel(self._update_check_timer)
+                    except Exception: pass
+                    self._update_check_timer = None
+                if sv_au.get():
+                    self.after(200, self._schedule_update_check)
                 dlg.destroy()
             else:
                 messagebox.showerror("Errore",

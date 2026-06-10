@@ -6,6 +6,23 @@ La versione dell'app è definita da `APP_VERSION` in `thickness_viewer_v1_4_6.py
 Pubblicando un tag `vX.Y.Z` la CI builda l'exe e crea la release su GitHub
 (da cui l'auto-update dell'app scarica la nuova versione).
 
+## [1.4.17] - 2026-06-10
+
+### Aggiunto
+- **Auto-update periodico e silenzioso.** Nuovo campo nelle Impostazioni
+  "Aggiornamenti automatici": se abilitato, l'app controlla GitHub ogni N minuti
+  (default 5) e, se trova una versione più recente, scarica e applica l'update
+  senza dialog di conferma. Il titolo della finestra mostra il progresso del download.
+- **Resume state dopo aggiornamento.** Prima di riavviarsi per applicare un update,
+  l'app salva in `C:\ProgramData\ThicknessViewer\resume_state.json` lo stato
+  corrente (IP PLC, rack, slot, polling, slot DB auto-export, stato auto-export).
+  Alla riapertura i parametri vengono ripristinati automaticamente; se l'auto-export
+  era in esecuzione, riparte da solo dopo 500 ms.
+- Nuova costante `PROGRAMDATA_RESUME` e funzioni `load_resume_state`,
+  `save_resume_state`, `delete_resume_state`.
+- `_update_check_timer` cancellato correttamente alla chiusura e al salvataggio
+  delle impostazioni.
+
 ## [1.4.16] - 2026-06-08
 
 ### Corretto
