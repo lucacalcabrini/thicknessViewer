@@ -6,6 +6,15 @@ La versione dell'app è definita da `APP_VERSION` in `thickness_viewer_v1_4_6.py
 Pubblicando un tag `vX.Y.Z` la CI builda l'exe e crea la release su GitHub
 (da cui l'auto-update dell'app scarica la nuova versione).
 
+## [1.4.21] - 2026-06-11
+
+### Corretto
+- **Soglia NOK bidirezionale nel viewer.** Il rilevamento celle fuori soglia ora usa
+  `|delta| > SpessoreMassimo` in entrambi i grafici (Profilo e Delta), allineato al
+  PLC FB936 v1.2 che controlla sia eccesso (disco troppo spesso) sia difetto (disco
+  troppo sottile). Aggiunta zona errore anche sotto la soglia negativa nei grafici,
+  linea tratteggiata simmetrica `sp_att ± sg` e fill separato "Difetto oltre soglia".
+
 ## [1.4.20] - 2026-06-10
 
 ### Corretto

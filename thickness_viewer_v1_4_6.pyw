@@ -19,7 +19,7 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.20"
+APP_VERSION = "1.4.21"
 APP_BUILD   = "2026-06-10"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
@@ -1216,15 +1216,19 @@ class ThicknessApp(tk.Tk):
             ax.axhline(sp_att,color=OK_CLR,lw=1.4,ls='-',alpha=0.85,
                        label=f'Spessore atteso: {sp_att:.3f} mm')
             ax.axhline(sp_att+sg,color=THRESHOLD_CLR,lw=1.3,ls='--',alpha=0.95,
-                       label=f'Soglia NOK: {sp_att+sg:.3f} mm')
-            ax.axhspan(max(0,sp_att-sg),sp_att+sg,alpha=0.055,color=OK_CLR,zorder=1)
+                       label=f'Soglia NOK: ±{sg:.3f} mm')
+            ax.axhline(sp_att-sg,color=THRESHOLD_CLR,lw=1.3,ls='--',alpha=0.95)
+            ax.axhspan(sp_att-sg,sp_att+sg,alpha=0.055,color=OK_CLR,zorder=1)
             ax.axhspan(sp_att+sg,sp_att+max(sg*3,0.2),alpha=0.07,color=ERR_CLR,zorder=1)
+            ax.axhspan(sp_att-max(sg*3,0.2),sp_att-sg,alpha=0.07,color=ERR_CLR,zorder=1)
             plotted=True
 
         if self._ck_nok.get() and prof_arr is not None and dlt_arr is not None:
             mask_delta=mask_valid & np.isfinite(dlt_arr)
-            mask_nok=mask_delta & (dlt_arr > sg)
-            mask_warn=mask_delta & (dlt_arr > sg*0.70) & (dlt_arr <= sg)
+            mask_nok_hi=mask_delta & (dlt_arr > sg)
+            mask_nok_lo=mask_delta & (dlt_arr < -sg)
+            mask_nok=mask_nok_hi | mask_nok_lo
+            mask_warn=mask_delta & (np.abs(dlt_arr) > sg*0.70) & (np.abs(dlt_arr) <= sg)
             if mask_warn.any():
                 ax.scatter(x[mask_warn],prof_arr[mask_warn],color=WARN_CLR,s=26,
                            marker='o',edgecolors=DARK_BG,linewidths=0.4,
@@ -1232,9 +1236,13 @@ class ThicknessApp(tk.Tk):
             if mask_nok.any():
                 ax.scatter(x[mask_nok],prof_arr[mask_nok],color=FUORI_CLR,s=42,
                            marker='x',lw=2.0,
-                           label=f'Celle NOK Delta>{sg:.2f}mm ({int(mask_nok.sum())})',zorder=9)
-                ax.vlines(x[mask_nok],sp_att+sg,prof_arr[mask_nok],
-                          colors=FUORI_CLR,lw=0.8,alpha=0.45,zorder=7)
+                           label=f'Celle NOK |Δ|>{sg:.2f}mm ({int(mask_nok.sum())})',zorder=9)
+                if mask_nok_hi.any():
+                    ax.vlines(x[mask_nok_hi],sp_att+sg,prof_arr[mask_nok_hi],
+                              colors=FUORI_CLR,lw=0.8,alpha=0.45,zorder=7)
+                if mask_nok_lo.any():
+                    ax.vlines(x[mask_nok_lo],prof_arr[mask_nok_lo],sp_att-sg,
+                              colors=FUORI_CLR,lw=0.8,alpha=0.45,zorder=7)
                 plotted=True
 
         # ── Spessore medio / dispersione / statistiche ────────
@@ -1247,10 +1255,10 @@ class ThicknessApp(tk.Tk):
             max_v  = float(np.max(prof_valid))
             if dlt_arr is not None:
                 dvalid = dlt_arr[mask_valid & np.isfinite(dlt_arr)]
-                n_nok  = int(np.count_nonzero(dvalid > sg))
-                n_warn = int(np.count_nonzero((dvalid > sg*0.70) & (dvalid <= sg)))
+                n_nok  = int(np.count_nonzero(np.abs(dvalid) > sg))
+                n_warn = int(np.count_nonzero((np.abs(dvalid) > sg*0.70) & (np.abs(dvalid) <= sg)))
                 # celle entro soglia (escluse NOK)
-                mask_ok = mask_valid & np.isfinite(prof_arr) & np.isfinite(dlt_arr) & (dlt_arr <= sg)
+                mask_ok = mask_valid & np.isfinite(prof_arr) & np.isfinite(dlt_arr) & (np.abs(dlt_arr) <= sg)
                 prof_ok  = prof_arr[mask_ok]
                 clean_mean_v = float(np.mean(prof_ok)) if prof_ok.size else None
             else:
@@ -1383,15 +1391,18 @@ class ThicknessApp(tk.Tk):
                 ax.fill_between(xm,sg,dm,where=(dm>sg),
                                 color=ERR_CLR,alpha=0.55,
                                 label='Eccesso oltre soglia')
-                ax.fill_between(xm,dm,0,where=(dm<0),
+                ax.fill_between(xm,dm,0,where=(dm<0)&(dm>=-sg),
                                 color=ACCENT,alpha=0.22,
                                 label='Difetto: disco piu sottile')
+                ax.fill_between(xm,-sg,dm,where=(dm<-sg),
+                                color=ERR_CLR,alpha=0.55,
+                                label='Difetto oltre soglia')
                 ax.plot(xm,dm,color=DELTA_CLR,lw=1.7,zorder=5,
                         label='Delta profilo')
                 ax.scatter(xm,dm,color=DELTA_CLR,s=10,alpha=0.45,zorder=6)
 
-                mask_warn=mask & (dlt_arr > sg*0.70) & (dlt_arr <= sg)
-                mask_nok=mask & (dlt_arr > sg)
+                mask_warn=mask & (np.abs(dlt_arr) > sg*0.70) & (np.abs(dlt_arr) <= sg)
+                mask_nok=mask & (np.abs(dlt_arr) > sg)
                 if mask_warn.any():
                     ax.scatter(x[mask_warn],dlt_arr[mask_warn],
                                color=WARN_CLR,s=28,marker='o',edgecolors=DARK_BG,
@@ -1432,11 +1443,11 @@ class ThicknessApp(tk.Tk):
         ax.axhline(0,color=OK_CLR,lw=1.4,ls='-',alpha=0.85,
                    label=f'Delta=0  atteso {sp_att:.3f}mm')
         ax.axhline(sg,color=ERR_CLR,lw=1.5,ls='--',alpha=0.9,
-                   label=f'Soglia NOK = {sg:.3f}mm')
-        ax.axhline(-sg,color=BORDER_CLR,lw=0.9,ls=':',alpha=0.55)
-        ax.axhspan(0,sg,alpha=0.045,color=OK_CLR,zorder=0)
+                   label=f'Soglia NOK = ±{sg:.3f}mm')
+        ax.axhline(-sg,color=ERR_CLR,lw=1.5,ls='--',alpha=0.9)
+        ax.axhspan(-sg,sg,alpha=0.045,color=OK_CLR,zorder=0)
         ax.axhspan(sg,sg*4,alpha=0.06,color=ERR_CLR,zorder=0)
-        ax.axhspan(-sg,0,alpha=0.035,color=ACCENT,zorder=0)
+        ax.axhspan(-sg*4,-sg,alpha=0.06,color=ERR_CLR,zorder=0)
 
         ax.set_xlabel("Posizione asse [mm]",color=TEXT_CLR,fontsize=10)
         ax.set_ylabel("Delta spessore (misurato - atteso) [mm]",color=TEXT_CLR,fontsize=10)
