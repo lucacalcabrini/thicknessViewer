@@ -19,7 +19,7 @@ Opzionale: pip install python-snap7  (PLC Reader / Auto-Export)
 Build EXE: pyinstaller --onefile --windowed thickness_viewer_v1_1_0.pyw
 """
 
-APP_VERSION = "1.4.21"
+APP_VERSION = "1.4.22"
 APP_BUILD   = "2026-06-10"
 APP_RELEASE = f"v{APP_VERSION} build {APP_BUILD}"
 FB_TARGET   = "Fb936_ControlloSpessore_v12"
@@ -270,7 +270,8 @@ def parse_db_text(text, filename="PLC_direct.db"):
 #  20  OvrTrasfertPerpassaggio    LReal(8)
 #  28  DisabilitaControllo        Bool(28.0)
 #  30  SpessoreDiscoRiferimento   Real(4)   [mm] disco campione
-#  34  AbilitaTaratura            Bool(34.0)
+#  34  TaraturaDiscoRiferimento   Bool(34.0) 1=tar.con disco rif  0=tar.con SpessoreAtteso
+#  34  AbilitaTaratura            Bool(34.1)
 # ══════════════════════════════════════════════════════════════════
 
 ARRAY_SIZE = 201    # Array[0..200], MaxData=200
@@ -324,7 +325,8 @@ def build_offset_map():
     b.lreal('I_ParametriCntrolloSpessore.OvrTrasfertPerpassaggio')   # 20
     b.bools(['I_ParametriCntrolloSpessore.DisabilitaControllo'])      # 28.0
     b._a(); b.real('I_ParametriCntrolloSpessore.SpessoreDiscoRiferimento')  # 30
-    b.bools(['I_ParametriCntrolloSpessore.AbilitaTaratura'])          # 34.0
+    b.bools(['I_ParametriCntrolloSpessore.TaraturaDiscoRiferimento',  # 34.0
+             'I_ParametriCntrolloSpessore.AbilitaTaratura'])          # 34.1
     b._a()                                                             # → 36
     # ── VAR_INPUT ─────────────────────────────────────────────────
     b.real('I_Spessore_mm')                                           # 36
@@ -1004,6 +1006,7 @@ class ThicknessApp(tk.Tk):
                 ('nLettureConsecutiveAllarme','N. celle consec.'),
                 ('OvrTrasfertPerpassaggio','Override %'),
                 ('SpessoreDiscoRiferimento','Disco taratura [mm]'),
+                ('TaraturaDiscoRiferimento','Tar. disco rif.'),
                 ('DisabilitaControllo','Disabilitato'),
                 ('AbilitaTaratura','Tarat. abilitata')]:
             row=ttk.Frame(bp); row.pack(fill="x",pady=1)

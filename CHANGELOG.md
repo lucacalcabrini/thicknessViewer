@@ -6,6 +6,14 @@ La versione dell'app è definita da `APP_VERSION` in `thickness_viewer_v1_4_6.py
 Pubblicando un tag `vX.Y.Z` la CI builda l'exe e crea la release su GitHub
 (da cui l'auto-update dell'app scarica la nuova versione).
 
+## [1.4.22] - 2026-06-12
+
+### Corretto
+- **Offset DB aggiornati per FB936 v1.2.** Il nuovo campo `TaraturaDiscoRiferimento : Bool`
+  nel UDT sposta `AbilitaTaratura` da bit 34.0 a bit 34.1. La dimensione del UDT rimane
+  36 byte (tutti gli altri offset invariati). Aggiunto `TaraturaDiscoRiferimento` nel
+  pannello parametri PLC.
+
 ## [1.4.21] - 2026-06-11
 
 ### Corretto
